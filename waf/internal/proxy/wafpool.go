@@ -105,7 +105,7 @@ func ValidateRules(rules string) error {
 	if strings.TrimSpace(rules) == "" {
 		return nil
 	}
-	_, err := coraza.NewWAF(coraza.NewWAFConfig().WithDirectives("SecRuleEngine On\n" + rules))
+	_, err := coraza.NewWAF(coraza.NewWAFConfig().WithRootFS(coreruleset.FS).WithDirectives("SecRuleEngine On\n" + rules))
 	if err != nil {
 		return fmt.Errorf("custom_rules: %w", err)
 	}

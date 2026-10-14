@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -258,7 +259,7 @@ func (a *Agent) applyConfig(ctx context.Context) {
 	if sr.Snapshot == nil {
 		return
 	}
-	resources := sr.Resources
+	resources := safeResources(sr.Resources)
 	if len(a.cfg.Engine.Resources) > 0 {
 		resources = a.cfg.Engine.Resources
 	}
@@ -308,4 +309,24 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// safeResources keeps the collections the controller may make this agent
+// write with the local admin token: configuration objects only, never
+// accounts, backups or other administrative endpoints.
+func safeResources(in []config.Resource) []config.Resource {
+	var out []config.Resource
+	for _, r := range in {
+		p := path.Clean(r.Path)
+		if p != r.Path || !strings.HasPrefix(p, "/api/open/") || strings.Contains(r.ListQuery, "/") {
+			continue
+		}
+		switch rest := strings.TrimPrefix(p, "/api/open/"); {
+		case rest == "users", rest == "backup", rest == "restore", rest == "audit",
+			strings.HasPrefix(rest, "me/"), strings.HasPrefix(rest, "alerts"):
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }

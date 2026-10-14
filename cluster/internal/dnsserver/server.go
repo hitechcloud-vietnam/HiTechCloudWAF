@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -111,6 +112,11 @@ func New(cfg *config.DNS, log *slog.Logger) (*Server, error) {
 	u, err := url.Parse(strings.TrimRight(cfg.ControllerURL, "/"))
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("invalid controller_url %q", cfg.ControllerURL)
+	}
+	if u.Scheme != "https" {
+		if ip := net.ParseIP(u.Hostname()); u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return nil, errors.New("controller_url must use https unless it is a loopback address (the DNS token would travel in clear)")
+		}
 	}
 	s.base = u
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}

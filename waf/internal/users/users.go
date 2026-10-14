@@ -275,18 +275,21 @@ func hashToken(t string) string {
 func (s *Store) Login(username, password, otp string) (string, *Session, error) {
 	s.mu.Lock()
 	u, ok := s.users[username]
-	s.mu.Unlock()
 	// Compare against a dummy hash when the user is unknown so timing does
 	// not reveal which usernames exist.
 	hash := dummyHash()
 	if ok {
 		hash = u.PasswordHash
 	}
+	s.mu.Unlock()
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil || !ok {
 		return "", nil, ErrBadLogin
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.users[username] != u || u.PasswordHash != hash {
+		return "", nil, ErrBadLogin // changed or deleted meanwhile
+	}
 	if u.TOTPSecret != "" {
 		if otp == "" {
 			return "", nil, ErrOTPRequired
@@ -377,22 +380,29 @@ func (s *Store) DisableTOTP(username, code string) error {
 	if u.TOTPSecret == "" {
 		return nil
 	}
-	if _, ok := VerifyTOTP(u.TOTPSecret, code, s.now()); !ok {
+	step, ok := VerifyTOTP(u.TOTPSecret, code, s.now())
+	if !ok || step <= u.LastOTPStep {
 		return ErrBadOTP
 	}
-	u.TOTPSecret = ""
+	u.TOTPSecret, u.LastOTPStep = "", step
 	return s.saveLocked()
 }
 
 // ChangePassword lets a user change their own password.
-func (s *Store) ChangePassword(username, current, next string) error {
+// Every other session of the user is ended; keepToken (the caller's own
+// session, may be empty) stays valid.
+func (s *Store) ChangePassword(username, current, next, keepToken string) error {
 	s.mu.Lock()
 	u, ok := s.users[username]
+	hash := ""
+	if ok {
+		hash = u.PasswordHash
+	}
 	s.mu.Unlock()
 	if !ok {
 		return ErrNotFound
 	}
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(current)) != nil {
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(current)) != nil {
 		return ErrBadLogin
 	}
 	if err := checkPassword(next); err != nil {
@@ -404,6 +414,14 @@ func (s *Store) ChangePassword(username, current, next string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.users[username] != u || u.PasswordHash != hash {
+		return ErrBadLogin
+	}
 	u.PasswordHash = string(h)
+	keep, had := s.sessions[hashToken(keepToken)]
+	s.dropSessionsLocked(username)
+	if had && keep.Username == username {
+		s.sessions[hashToken(keepToken)] = keep
+	}
 	return s.saveLocked()
 }

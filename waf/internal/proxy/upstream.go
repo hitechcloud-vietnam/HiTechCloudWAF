@@ -63,7 +63,7 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 				prior := ""
 				// Keep the chain only when it came through a trusted proxy.
 				if peer := remoteIP(pr.In.RemoteAddr); peer != nil && contains(e.opt.TrustedProxies, peer) {
-					prior = pr.In.Header.Get("X-Forwarded-For")
+					prior = strings.Join(pr.In.Header.Values("X-Forwarded-For"), ", ")
 				}
 				xff := v.ip.String()
 				if prior != "" {

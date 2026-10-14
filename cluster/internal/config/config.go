@@ -145,6 +145,14 @@ type Controller struct {
 	// ProbeInsecure skips TLS verification for node probes (nodes usually
 	// answer probes by IP, so names do not match).
 	ProbeInsecure bool `yaml:"probe_insecure"`
+	// AllowLoopbackNodes accepts node addresses on loopback, link-local and
+	// similar ranges (labs only); probes refuse to dial them otherwise.
+	AllowLoopbackNodes bool `yaml:"allow_loopback_nodes"`
+	// AllowAddressChange lets a node change its registered IPv4/IPv6 by
+	// heartbeat. Off by default: since every node shares the node token, a
+	// changed address must be accepted by an admin (delete the node, it then
+	// registers again).
+	AllowAddressChange bool `yaml:"allow_address_change"`
 	// ForgetAfter removes nodes that have been silent this long (0 = never).
 	ForgetAfter Duration `yaml:"forget_after"`
 

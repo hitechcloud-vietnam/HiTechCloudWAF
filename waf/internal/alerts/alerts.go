@@ -13,11 +13,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -298,7 +300,13 @@ func (n *Notifier) telegram(ctx context.Context, a Alert) error {
 	body, _ := json.Marshal(map[string]any{
 		"chat_id": n.cfg.Telegram.ChatID, "text": a.Text(), "parse_mode": "HTML", "disable_web_page_preview": true,
 	})
-	return n.post(ctx, strings.TrimRight(n.cfg.Telegram.APIBase, "/")+"/bot"+n.cfg.Telegram.BotToken+"/sendMessage", body, nil)
+	err := n.post(ctx, strings.TrimRight(n.cfg.Telegram.APIBase, "/")+"/bot"+n.cfg.Telegram.BotToken+"/sendMessage", body, nil)
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// The URL carries the bot token: keep it out of logs and API errors.
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // Sign returns the X-HCW-Signature value for body.

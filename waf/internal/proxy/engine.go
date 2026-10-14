@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -425,6 +426,66 @@ func contains(nets []*net.IPNet, ip net.IP) bool {
 	return false
 }
 
+// redirectHost keeps the requested host only when it is one of the site's
+// names, so a forged Host header cannot turn the redirect into another site.
+func redirectHost(s *siteRT, host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	fallback := ""
+	for _, n := range s.site.ServerNames {
+		n = strings.ToLower(n)
+		switch {
+		case n == "_":
+			continue
+		case strings.HasPrefix(n, "*."):
+			if strings.HasSuffix(host, n[1:]) && validHost(host) {
+				return host
+			}
+		case n == host:
+			return host
+		case fallback == "":
+			fallback = n
+		}
+	}
+	if fallback != "" || !validHost(host) {
+		return fallback
+	}
+	return host
+}
+
+func validHost(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	if net.ParseIP(h) != nil {
+		return true
+	}
+	for i := 0; i < len(h); i++ {
+		c := h[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalPath rejects dot segments, empty segments and backslashes.
+func canonicalPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return p == "" || p == "*"
+	}
+	if strings.ContainsRune(p, '\\') {
+		return false
+	}
+	c := path.Clean(p)
+	if strings.HasSuffix(p, "/") && c != "/" {
+		c += "/"
+	}
+	return c == p
+}
+
 // clientIP returns the visitor address, honouring X-Forwarded-For only when
 // the direct peer is a trusted proxy (e.g. a load balancer in front).
 func (e *Engine) clientIP(r *http.Request) net.IP {
@@ -436,7 +497,9 @@ func (e *Engine) clientIP(r *http.Request) net.IP {
 	if ip == nil || !contains(e.opt.TrustedProxies, ip) {
 		return ip
 	}
-	xff := r.Header.Get("X-Forwarded-For")
+	// A client can send its own X-Forwarded-For line before the one the
+	// proxy adds, so every line is taken into account.
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 	parts := strings.Split(xff, ",")
 	// Walk from the right, skipping our own trusted hops.
 	for i := len(parts) - 1; i >= 0; i-- {
@@ -603,13 +666,23 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 	}
 	e.opt.Events.CountRequest(s.site.ID)
 
+	// Rules match on the path as sent, and most upstreams resolve dot
+	// segments themselves: "/static/../admin" must not pass as "/static/".
+	if !canonicalPath(r.URL.Path) {
+		e.block(w, r, e.event(r, s, ip, "bad_path", "block", http.StatusBadRequest))
+		return
+	}
+
 	if s.site.RedirectHTTPS && !isTLS && s.httpsPort != 0 {
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		host := redirectHost(s, r.Host)
+		if host == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		if s.httpsPort != 443 {
 			host = net.JoinHostPort(host, strconv.Itoa(s.httpsPort))
+		} else if strings.Contains(host, ":") {
+			host = "[" + host + "]"
 		}
 		infoOf(r).set("redirected")
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
@@ -652,7 +725,7 @@ rules:
 			skipWAF = true
 		case model.RuleRateLimit:
 			rl := rule.RateLimit
-			key := strconv.Itoa(s.site.ID) + "|r" + strconv.Itoa(i) + "|" + ip.String()
+			key := strconv.Itoa(s.site.ID) + "|r" + strconv.Itoa(i) + "|" + ipKey(ip)
 			if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
 				e.block(w, r, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
 				return
@@ -661,7 +734,7 @@ rules:
 	}
 
 	if rl := s.site.RateLimit; rl.Requests > 0 && !allowed {
-		key := strconv.Itoa(s.site.ID) + "|" + ip.String()
+		key := strconv.Itoa(s.site.ID) + "|" + ipKey(ip)
 		if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
 			e.block(w, r, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
 			return

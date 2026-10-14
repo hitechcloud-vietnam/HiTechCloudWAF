@@ -10,6 +10,8 @@
 #   --version vX.Y.Z   release to install (default: latest)
 #   --binary PATH      use a local binary instead of downloading
 #   --no-start         write files only
+#   --node-token-file F / --dns-token-file F  read the token from a file
+#                      (keeps it out of the process list and shell history)
 # Environment:
 #   HCW_REPO      GitHub repository (default hitechcloud-vietnam/HiTechCloudWAF)
 #   GITHUB_TOKEN  needed when the repository is private
@@ -39,7 +41,9 @@ while [ $# -gt 0 ]; do
     --geoip) GEOIP=1; shift ;;
     --controller) CONTROLLER=$2; shift 2 ;;
     --node-token) NODE_TOKEN=$2; shift 2 ;;
+    --node-token-file) NODE_TOKEN=$(cat "$2") || exit 1; shift 2 ;;
     --dns-token) DNS_TOKEN=$2; shift 2 ;;
+    --dns-token-file) DNS_TOKEN=$(cat "$2") || exit 1; shift 2 ;;
     --ca) CA=$2; shift 2 ;;
     --region) REGION=$2; shift 2 ;;
     --pools) POOLS=$2; shift 2 ;;
@@ -70,28 +74,46 @@ fetch() { # fetch <asset> <dest>
   else url="https://github.com/$REPO/releases/download/$VERSION/$1"; fi
   info "downloading $url"
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    # Private repositories: resolve the asset through the API.
+    # Private repositories: resolve the asset through the API. The token is
+    # passed in a header file so it does not show up in the process list.
     local api="https://api.github.com/repos/$REPO/releases/latest"
     [ "$VERSION" != latest ] && api="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
-    local id
-    id=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$api" | python3 -c '
+    local id hdr
+    hdr=$(mktemp); chmod 600 "$hdr"
+    printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$hdr"
+    id=$(curl -fsSL -H @"$hdr" "$api" | python3 -c '
 import json, sys
 for a in json.load(sys.stdin).get("assets", []):
     if a["name"] == sys.argv[1]:
         print(a["id"])' "$1")
-    [ -n "$id" ] || die "asset $1 not found in release $VERSION"
-    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/octet-stream" \
-      "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$2"
+    [ -n "$id" ] || { rm -f "$hdr"; die "asset $1 not found in release $VERSION"; }
+    curl -fsSL -H @"$hdr" -H "Accept: application/octet-stream" \
+      "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$2" || { rm -f "$hdr"; die "download of $1 failed"; }
+    rm -f "$hdr"
   else
     curl -fsSL "$url" -o "$2"
   fi
+}
+
+SUMS=""
+verify() { # verify <asset> <file>: compare with the release SHA256SUMS
+  if [ -z "$SUMS" ]; then SUMS=$(mktemp); fetch SHA256SUMS "$SUMS"; fi
+  local want got
+  want=$(awk -v n="$1" '$2 == n || $2 == "*" n {print $1}' "$SUMS")
+  [ -n "$want" ] || { echo "error: $1 is not listed in SHA256SUMS" >&2; return 1; }
+  got=$(sha256sum "$2" | awk '{print $1}')
+  [ "$want" = "$got" ] && info "checksum ok ($1)"
 }
 
 install_bin() { # install_bin <name> <asset>
   local dest="$ROOT/usr/local/bin/$1"
   mkdir -p "$ROOT/usr/local/bin"
   if [ -n "$BINARY" ]; then install -m 0755 "$BINARY" "$dest"
-  else local tmp; tmp=$(mktemp); fetch "$2" "$tmp"; install -m 0755 "$tmp" "$dest"; rm -f "$tmp"; fi
+  else
+    local tmp; tmp=$(mktemp); fetch "$2" "$tmp"
+    verify "$2" "$tmp" || { rm -f "$tmp"; die "checksum mismatch for $2"; }
+    install -m 0755 "$tmp" "$dest"; rm -f "$tmp"
+  fi
   info "installed $dest"
 }
 
@@ -234,6 +256,9 @@ controller)
   for t in admin node dns primary-engine; do [ -s "$ETC/secrets/$t.token" ] || (umask 077; randtok > "$ETC/secrets/$t.token"); done
   if [ -s "$ROOT/etc/hcw-waf/api.token" ]; then (umask 077; cp "$ROOT/etc/hcw-waf/api.token" "$ETC/secrets/primary-engine.token"); fi
   if [ ! -s "$ETC/tls/ca.key" ]; then
+    # Private keys must never be readable by other users, whatever openssl's
+    # defaults are.
+    OLD_UMASK=$(umask); umask 077
     openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes -keyout "$ETC/tls/ca.key" -out "$ETC/tls/ca.crt" \
       -subj "/O=HiTechCloud WAF/CN=HiTechCloud WAF Cluster CA" >/dev/null 2>&1
     SAN="DNS:$NAME"; [ -n "$IP" ] && SAN="$SAN,IP:$IP"
@@ -243,6 +268,8 @@ controller)
     openssl x509 -req -in "$ETC/tls/controller.csr" -CA "$ETC/tls/ca.crt" -CAkey "$ETC/tls/ca.key" -CAcreateserial \
       -days 825 -sha256 -extfile "$ETC/tls/ext.cnf" -out "$ETC/tls/controller.crt" >/dev/null 2>&1
     rm -f "$ETC/tls/controller.csr" "$ETC/tls/ext.cnf"
+    chmod 600 "$ETC/tls/ca.key" "$ETC/tls/controller.key"; chmod 644 "$ETC/tls/ca.crt" "$ETC/tls/controller.crt"
+    umask "$OLD_UMASK"
   fi
   cat > "$ETC/controller.yaml" <<'EOF'
 controller:

@@ -99,8 +99,15 @@ func (a *API) authorized(r *http.Request) bool {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/open/health", func(w http.ResponseWriter, _ *http.Request) { ok(w, "ok") })
-	mux.HandleFunc("GET /api/open/site", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/open/site", func(w http.ResponseWriter, r *http.Request) {
 		s := a.Store.Sites()
+		if !callerOf(r).admin() {
+			for i := range s {
+				if s[i].Auth.PasswordHash != "" {
+					s[i].Auth.PasswordHash = redacted
+				}
+			}
+		}
 		ok(w, list[model.Site]{Data: s, Total: len(s)})
 	})
 	mux.HandleFunc("POST /api/open/site", a.write(func(r *http.Request) (any, error) {
@@ -133,8 +140,13 @@ func (a *API) Handler() http.Handler {
 		}
 		return nil, a.Store.DeleteSites(b.IDs)
 	}))
-	mux.HandleFunc("GET /api/open/cert", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/open/cert", func(w http.ResponseWriter, r *http.Request) {
 		c := a.Store.Certs()
+		if !callerOf(r).admin() {
+			for i := range c {
+				c[i].Key = redacted // private keys are for administrators only
+			}
+		}
 		ok(w, list[model.Cert]{Data: c, Total: len(c)})
 	})
 	mux.HandleFunc("POST /api/open/cert", a.write(func(r *http.Request) (any, error) {
@@ -212,6 +224,11 @@ func (a *API) Handler() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		for _, site := range b.Sites {
+			if err := proxy.ValidateRules(site.CustomRules); err != nil {
+				return nil, fmt.Errorf("site %d: %w", site.ID, err)
+			}
+		}
 		if err := a.Store.Replace(b); err != nil {
 			return nil, err
 		}
@@ -223,6 +240,7 @@ func (a *API) Handler() http.Handler {
 			return
 		}
 		if err := a.Alerts.SendTest(r.Context()); err != nil {
+			a.Log.Warn("test alert failed", "err", err)
 			fail(w, http.StatusBadGateway, "delivery_failed", err)
 			return
 		}
@@ -318,6 +336,9 @@ func (c *codeRecorder) WriteHeader(code int) {
 	c.code = code
 	c.ResponseWriter.WriteHeader(code)
 }
+
+// redacted replaces secrets in responses to read-only users.
+const redacted = "***"
 
 func adminOnly(w http.ResponseWriter, r *http.Request) bool {
 	if !callerOf(r).admin() {

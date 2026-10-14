@@ -114,3 +114,16 @@ func TestAgentRegistersAndReplicates(t *testing.T) {
 		t.Fatal("node with failing engine must be unhealthy")
 	}
 }
+
+func TestSafeResources(t *testing.T) {
+	in := []config.Resource{
+		{Name: "site", Path: "/api/open/site"}, {Name: "cert", Path: "/api/open/cert"},
+		{Name: "u", Path: "/api/open/users"}, {Name: "m", Path: "/api/open/me/password"},
+		{Name: "r", Path: "/api/open/restore"}, {Name: "x", Path: "/api/open/../auth/login"},
+		{Name: "y", Path: "/v1/other"},
+	}
+	out := safeResources(in)
+	if len(out) != 2 || out[0].Name != "site" || out[1].Name != "cert" {
+		t.Fatalf("unexpected resources kept: %+v", out)
+	}
+}

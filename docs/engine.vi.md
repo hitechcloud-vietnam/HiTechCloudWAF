@@ -9,10 +9,11 @@ image của Chaitin**. Binary: `hcw-waf`.
 Client ─► listener (HTTP / HTTPS theo SNI)
           │
           ├─ chọn site theo Host (tên chính xác, wildcard *.domain, hoặc "_")
-          ├─ redirect HTTPS (tuỳ chọn)
+          ├─ đường dẫn không chuẩn (`/./`, `/../`, `//`, `\`) → 400
+          ├─ redirect HTTPS (tuỳ chọn, chỉ tới tên miền của site)
           ├─ ACL IP: ip_deny → 403, ip_allow (nếu có) → 403
           ├─ Rule theo đường dẫn (allow / deny / skip_waf / rate_limit)
-          ├─ Rate limit theo IP/site → 429 + thời gian chặn
+          ├─ Rate limit theo IP/site (IPv6 gộp theo /64) → 429 + thời gian chặn
           ├─ Auth challenge (mật khẩu) → trang đăng nhập
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
@@ -360,3 +361,14 @@ thật.
 - failover upstream;
 - TLS nhiều chứng chỉ theo SNI;
 - CRUD API và lưu trữ.
+
+## Ghi chú bảo mật
+
+- Tài khoản `viewer` không đọc được private key chứng chỉ, hash mật khẩu
+  site và danh sách người dùng (API trả `***` hoặc 403).
+- `custom_rules` chỉ nhận `SecRule`, `SecAction`, `SecMarker`,
+  `SecRuleRemoveBy*`, `SecRuleUpdate*`; không được dùng operator đọc file
+  hoặc mạng (`@pmf`, `@pmFromFile`, `@ipMatchF`, `@inspectFile`, `@rbl`…).
+- Đổi mật khẩu kết thúc mọi phiên đăng nhập khác của tài khoản.
+- Đăng nhập console bị giới hạn theo IP (10 lần/15 phút) và theo tài khoản
+  (50 lần/15 phút).

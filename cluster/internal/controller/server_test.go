@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,7 @@ func TestProbeAndHeartbeatTimeout(t *testing.T) {
 	defer up.Close()
 	u, _ := url.Parse(up.URL)
 
+	s.cfg.AllowLoopbackNodes = true // the test upstream listens on loopback
 	h := hb("n1", "127.0.0.1", "hn")
 	h.ProbeURL = "http://" + u.Host + "/"
 	if _, err := s.Store().Heartbeat(h); err != nil {
@@ -181,5 +183,32 @@ func TestDashboardIsBranded(t *testing.T) {
 	b, _ := io.ReadAll(r.Body)
 	if r.StatusCode != 200 || !bytes.Contains(b, []byte("HiTechCloud WAF · Cluster")) {
 		t.Fatalf("dashboard: %d", r.StatusCode)
+	}
+}
+
+func TestHeartbeatAddressRules(t *testing.T) {
+	s, ts := newTestServer(t)
+	// Loopback node addresses (and probes to them) are refused by default.
+	h := hb("n1", "127.0.0.1", "hn")
+	h.ProbeURL = "http://127.0.0.1:8080/internal/admin"
+	if r := do(t, ts, "POST", "/v1/heartbeat", "node", h); r.StatusCode != 400 {
+		t.Fatalf("loopback node accepted: %d", r.StatusCode)
+	}
+	if ok, msg := s.probeOnce(context.Background(), "http://127.0.0.1:1/"); ok || !strings.Contains(msg, "refused") {
+		t.Fatalf("probe to loopback dialed: %v %s", ok, msg)
+	}
+	// A registered node cannot be moved to another address by heartbeat.
+	if r := do(t, ts, "POST", "/v1/heartbeat", "node", hb("edge-1", "203.0.113.1", "hn")); r.StatusCode != 200 {
+		t.Fatalf("register: %d", r.StatusCode)
+	}
+	if r := do(t, ts, "POST", "/v1/heartbeat", "node", hb("edge-1", "203.0.113.66", "hn")); r.StatusCode != 409 {
+		t.Fatalf("address takeover accepted: %d", r.StatusCode)
+	}
+	if n, _ := s.Store().Get("edge-1"); n.IPv4 != "203.0.113.1" {
+		t.Fatalf("address changed: %s", n.IPv4)
+	}
+	s.cfg.AllowAddressChange = true
+	if r := do(t, ts, "POST", "/v1/heartbeat", "node", hb("edge-1", "203.0.113.66", "hn")); r.StatusCode != 200 {
+		t.Fatalf("allowed change refused: %d", r.StatusCode)
 	}
 }

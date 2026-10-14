@@ -11,6 +11,7 @@ import (
 	"math/bits"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -83,9 +84,21 @@ func excluded(path string, prefixes []string) bool {
 	return false
 }
 
+// authSlots bounds concurrent password checks (bcrypt is CPU heavy).
+var authSlots = make(chan struct{}, 16)
+
 // safeReturn keeps redirects on the same site.
 func safeReturn(r string) string {
-	if !strings.HasPrefix(r, "/") || strings.HasPrefix(r, "//") || strings.HasPrefix(r, "/\\") || strings.ContainsAny(r, "\r\n") {
+	if !strings.HasPrefix(r, "/") || strings.HasPrefix(r, "//") || strings.ContainsRune(r, '\\') {
+		return "/"
+	}
+	// Browsers drop tabs and newlines, so "/\t/evil" would become "//evil".
+	for i := 0; i < len(r); i++ {
+		if r[i] < 0x20 || r[i] == 0x7f {
+			return "/"
+		}
+	}
+	if u, err := url.Parse(r); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
 	return r
@@ -170,6 +183,13 @@ func (e *Engine) handleEngineEndpoint(w http.ResponseWriter, r *http.Request, s 
 		// 10 attempts per 10 minutes, then a 15 minute lock.
 		if !e.limiter.allow(key, 10, 10*time.Minute, 15*time.Minute, time.Now()) {
 			e.block(w, r, e.event(r, s, ip, "auth", "block", http.StatusTooManyRequests))
+			return true
+		}
+		select {
+		case authSlots <- struct{}{}:
+			defer func() { <-authSlots }()
+		default:
+			http.Error(w, "busy, try again", http.StatusServiceUnavailable)
 			return true
 		}
 		if bcrypt.CompareHashAndPassword([]byte(s.site.Auth.PasswordHash), []byte(r.PostForm.Get("password"))) != nil {

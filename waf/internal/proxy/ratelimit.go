@@ -22,6 +22,36 @@ type limEntry struct {
 	bannedUntil time.Time
 }
 
+// maxShardEntries bounds memory under floods from many addresses.
+const maxShardEntries = 16384
+
+// evictLocked drops a few entries that are not banned, oldest window first
+// among a random sample (map iteration order is random).
+func (sh *limShard) evictLocked(now time.Time) {
+	var victim string
+	var oldest time.Time
+	n := 0
+	for k, e := range sh.m {
+		if n++; n > 16 {
+			break
+		}
+		if now.Before(e.bannedUntil) {
+			continue
+		}
+		if victim == "" || e.windowStart.Before(oldest) {
+			victim, oldest = k, e.windowStart
+		}
+	}
+	if victim == "" {
+		// Everything sampled is banned: drop one anyway to stay bounded.
+		for k := range sh.m {
+			victim = k
+			break
+		}
+	}
+	delete(sh.m, victim)
+}
+
 func newLimiter() *limiter {
 	l := &limiter{}
 	for i := range l.shards {
@@ -46,6 +76,9 @@ func (l *limiter) allow(key string, limit int, window, ban time.Duration, now ti
 	defer sh.mu.Unlock()
 	e, ok := sh.m[key]
 	if !ok {
+		if len(sh.m) >= maxShardEntries {
+			sh.evictLocked(now)
+		}
 		e = &limEntry{windowStart: now}
 		sh.m[key] = e
 	}

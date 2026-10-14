@@ -28,45 +28,67 @@ type principal struct {
 
 func (p principal) admin() bool { return p.role == users.RoleAdmin }
 
-// loginGuard limits failed logins per client address.
+// loginGuard limits failed logins per client address and per username (a
+// higher limit, so distributed guessing is slowed without letting one
+// attacker lock an account out too easily).
 type loginGuard struct {
 	mu   sync.Mutex
 	fail map[string][]time.Time
 }
 
 const (
-	maxLoginFailures = 10
-	loginWindow      = 15 * time.Minute
+	maxLoginFailures     = 10
+	maxUserLoginFailures = 50
+	loginWindow          = 15 * time.Minute
+	maxGuardEntries      = 50000
 )
 
-func (g *loginGuard) blocked(ip string, now time.Time) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.fail == nil {
-		g.fail = map[string][]time.Time{}
-	}
-	recent := g.fail[ip][:0]
-	for _, t := range g.fail[ip] {
+func (g *loginGuard) recentLocked(key string, now time.Time) int {
+	recent := g.fail[key][:0]
+	for _, t := range g.fail[key] {
 		if now.Sub(t) < loginWindow {
 			recent = append(recent, t)
 		}
 	}
 	if len(recent) == 0 {
-		delete(g.fail, ip) // keep the map from growing with old addresses
+		delete(g.fail, key) // keep the map from growing with old addresses
 	} else {
-		g.fail[ip] = recent
+		g.fail[key] = recent
 	}
-	return len(recent) >= maxLoginFailures
+	return len(recent)
 }
 
-func (g *loginGuard) failed(ip string, now time.Time) {
+func (g *loginGuard) blocked(ip, username string, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.fail == nil {
 		g.fail = map[string][]time.Time{}
 	}
-	g.fail[ip] = append(g.fail[ip], now)
+	return g.recentLocked(ip, now) >= maxLoginFailures || g.recentLocked("user\x00"+username, now) >= maxUserLoginFailures
 }
+
+func (g *loginGuard) failed(ip, username string, now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.fail == nil {
+		g.fail = map[string][]time.Time{}
+	}
+	if len(g.fail) >= maxGuardEntries {
+		for k := range g.fail {
+			g.recentLocked(k, now)
+		}
+	}
+	if len(g.fail) >= maxGuardEntries {
+		return // flooded with fresh addresses: per-user limit still applies
+	}
+	g.fail[ip] = append(g.fail[ip], now)
+	if k := "user\x00" + username; len(g.fail[k]) < maxUserLoginFailures*2 {
+		g.fail[k] = append(g.fail[k], now)
+	}
+}
+
+// loginSlots bounds concurrent password checks (bcrypt is CPU heavy).
+var loginSlots = make(chan struct{}, 8)
 
 func clientHost(r *http.Request) string {
 	h, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -103,10 +125,6 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientHost(r)
-	if a.guard.blocked(ip, time.Now()) {
-		fail(w, http.StatusTooManyRequests, "locked", errors.New("too many failed logins, try again in 15 minutes"))
-		return
-	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -116,6 +134,19 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid", err)
 		return
 	}
+	if a.guard.blocked(ip, in.Username, time.Now()) {
+		fail(w, http.StatusTooManyRequests, "locked", errors.New("too many failed logins, try again in 15 minutes"))
+		return
+	}
+	select {
+	case loginSlots <- struct{}{}:
+		defer func() { <-loginSlots }()
+	case <-time.After(5 * time.Second):
+		fail(w, http.StatusTooManyRequests, "busy", errors.New("too many logins in progress, try again"))
+		return
+	case <-r.Context().Done():
+		return
+	}
 	tok, sess, err := a.Users.Login(in.Username, in.Password, in.OTP)
 	switch {
 	case errors.Is(err, users.ErrOTPRequired):
@@ -123,7 +154,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnauthorized, "otp_required", err)
 		return
 	case err != nil:
-		a.guard.failed(ip, time.Now())
+		a.guard.failed(ip, in.Username, time.Now())
 		if a.Audit != nil {
 			a.Audit.Add(audit.Entry{Time: time.Now().UTC(), User: in.Username, IP: ip, Action: "login", Status: http.StatusUnauthorized})
 		}
@@ -174,7 +205,7 @@ func (a *API) registerAccountRoutes(mux *http.ServeMux) {
 			fail(w, http.StatusBadRequest, "invalid", err)
 			return
 		}
-		if err := a.Users.ChangePassword(p.name, in.Current, in.New); err != nil {
+		if err := a.Users.ChangePassword(p.name, in.Current, in.New, r.Header.Get(SessionHeader)); err != nil {
 			fail(w, http.StatusBadRequest, "invalid", err)
 			return
 		}
@@ -224,7 +255,10 @@ func (a *API) registerAccountRoutes(mux *http.ServeMux) {
 	}))
 
 	// User management (admins).
-	mux.HandleFunc("GET /api/open/users", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/open/users", func(w http.ResponseWriter, r *http.Request) {
+		if !adminOnly(w, r) {
+			return
+		}
 		if a.Users == nil {
 			ok(w, list[users.PublicUser]{Data: []users.PublicUser{}})
 			return

@@ -139,3 +139,15 @@ func TestEventsHook(t *testing.T) {
 		t.Fatal("observer not called")
 	}
 }
+
+func TestTelegramErrorHidesToken(t *testing.T) {
+	s := &sink{}
+	n, _ := newNotifier(t, s)
+	n.cfg.Webhooks = nil
+	n.cfg.Telegram.BotToken = "123456:SECRET-BOT-TOKEN"
+	n.cfg.Telegram.APIBase = "http://127.0.0.1:1"
+	err := n.SendTest(context.Background())
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("error leaks the bot token: %v", err)
+	}
+}

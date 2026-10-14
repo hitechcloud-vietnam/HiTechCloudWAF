@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/api"
@@ -73,7 +74,16 @@ func New(cfg *config.Controller, log *slog.Logger) (*Server, error) {
 		probe: &http.Client{
 			Timeout: cfg.ProbeTimeout.Duration,
 			Transport: &http.Transport{
-				Proxy:           nil,
+				Proxy: nil,
+				// Checked at dial time too, so DNS tricks cannot reach
+				// internal addresses.
+				DialContext: (&net.Dialer{Timeout: cfg.ProbeTimeout.Duration, Control: func(_, address string, _ syscall.RawConn) error {
+					host, _, _ := net.SplitHostPort(address)
+					if ip := net.ParseIP(host); ip == nil || (!cfg.AllowLoopbackNodes && reservedIP(ip)) {
+						return fmt.Errorf("probe to %s refused", host)
+					}
+					return nil
+				}}).DialContext,
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.ProbeInsecure}, //nolint:gosec // opt-in, probes carry no secrets
 			},
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -150,7 +160,7 @@ func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 // validateHeartbeat checks the agent report. The probe URL must point at the
 // node's own address so a node token cannot make the controller request
 // arbitrary internal URLs.
-func validateHeartbeat(hb *api.Heartbeat) error {
+func validateHeartbeat(hb *api.Heartbeat, allowLoopback bool) error {
 	if !idPattern.MatchString(hb.ID) {
 		return errors.New("invalid node id")
 	}
@@ -164,6 +174,13 @@ func validateHeartbeat(hb *api.Heartbeat) error {
 		ip := net.ParseIP(hb.IPv6)
 		if ip == nil || ip.To4() != nil {
 			return errors.New("ipv6 must be a valid IPv6 address")
+		}
+	}
+	if !allowLoopback {
+		for _, a := range []string{hb.IPv4, hb.IPv6} {
+			if ip := net.ParseIP(a); ip != nil && reservedIP(ip) {
+				return fmt.Errorf("node address %s is loopback, link-local, multicast or unspecified", a)
+			}
 		}
 	}
 	if hb.Weight < 0 || hb.Weight > 10000 {
@@ -187,6 +204,12 @@ func validateHeartbeat(hb *api.Heartbeat) error {
 	return nil
 }
 
+// reservedIP reports addresses a node can never legitimately serve from.
+func reservedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast()
+}
+
 func sameIP(a, b string) bool {
 	x, y := net.ParseIP(a), net.ParseIP(b)
 	return x != nil && y != nil && x.Equal(y)
@@ -199,8 +222,14 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := validateHeartbeat(&hb); err != nil {
+	if err := validateHeartbeat(&hb, s.cfg.AllowLoopbackNodes); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if old, ok := s.store.Get(hb.ID); ok && !s.cfg.AllowAddressChange &&
+		(!sameIP(old.IPv4, hb.IPv4) || (old.IPv6 != hb.IPv6 && !sameIP(old.IPv6, hb.IPv6))) {
+		s.log.Warn("heartbeat with a changed address refused", "node", hb.ID, "ipv4", hb.IPv4, "registered", old.IPv4)
+		http.Error(w, "node "+hb.ID+" is registered with another address; an admin must delete it first", http.StatusConflict)
 		return
 	}
 	evs := hb.Events

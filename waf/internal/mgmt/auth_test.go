@@ -126,3 +126,45 @@ func TestTOTPThroughAPIAndLockout(t *testing.T) {
 		t.Fatalf("lockout: %d %s", code, e)
 	}
 }
+
+func TestViewerCannotReadSecrets(t *testing.T) {
+	ts, _ := setupUsers(t)
+	call(t, ts, "POST", "/api/open/users", map[string]string{"username": "xem", "password": "Mat-khau-dai-2026", "role": "viewer"}, token)
+	certPEM, keyPEM := testCert(t)
+	if code, env := call(t, ts, "POST", "/api/open/cert", map[string]string{"crt": certPEM, "key": keyPEM}, token); code != 200 {
+		t.Fatalf("create cert: %d %v", code, env.Err)
+	}
+	_, viewer, _ := login(t, ts, "xem", "Mat-khau-dai-2026", "")
+	code, env := req(t, ts, "GET", "/api/open/cert", viewer, nil)
+	if code != 200 {
+		t.Fatalf("viewer cert list: %d", code)
+	}
+	for _, c := range env.Data.(map[string]any)["data"].([]any) {
+		if k := c.(map[string]any)["key"]; k != redacted {
+			t.Fatalf("viewer got the private key: %v", k)
+		}
+	}
+	if code, _ := req(t, ts, "GET", "/api/open/users", viewer, nil); code != 403 {
+		t.Fatalf("viewer listed users: %d", code)
+	}
+	_, env = call(t, ts, "GET", "/api/open/cert", nil, token)
+	if k := env.Data.(map[string]any)["data"].([]any)[0].(map[string]any)["key"]; k == redacted {
+		t.Fatal("admin must still get the key")
+	}
+}
+
+func TestPasswordChangeEndsOtherSessions(t *testing.T) {
+	ts, us := setupUsers(t)
+	_ = us.Create("anh", "Mat-khau-dai-2026", users.RoleAdmin)
+	_, s1, _ := login(t, ts, "anh", "Mat-khau-dai-2026", "")
+	_, s2, _ := login(t, ts, "anh", "Mat-khau-dai-2026", "")
+	if code, env := req(t, ts, "POST", "/api/open/me/password", s1, map[string]string{"current": "Mat-khau-dai-2026", "new": "Mat-khau-moi-2027"}); code != 200 {
+		t.Fatalf("change password: %d %v", code, env.Err)
+	}
+	if code, _ := req(t, ts, "GET", "/api/open/site", s1, nil); code != 200 {
+		t.Fatalf("own session ended: %d", code)
+	}
+	if code, _ := req(t, ts, "GET", "/api/open/site", s2, nil); code != 401 {
+		t.Fatalf("other session survived: %d", code)
+	}
+}

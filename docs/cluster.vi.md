@@ -110,3 +110,18 @@ Dashboard: `https://controller.example.vn:7443/`, đăng nhập bằng `admin.to
 ```bash
 cd cluster && go vet ./... && go test -race ./...
 ```
+
+## Ghi chú bảo mật
+
+- Node không được khai báo địa chỉ loopback, link-local, multicast; probe
+  của controller cũng từ chối kết nối tới các dải đó (bật
+  `allow_loopback_nodes: true` chỉ khi thử nghiệm trong lab).
+- Một node đã đăng ký không thể đổi IPv4/IPv6 qua heartbeat (chống chiếm
+  node bằng token dùng chung). Khi node đổi IP thật, xoá node trên dashboard
+  hoặc `DELETE /v1/nodes/{id}` rồi để agent đăng ký lại; hoặc đặt
+  `allow_address_change: true`.
+- Agent chỉ đồng bộ các collection cấu hình dưới `/api/open/` (không bao giờ
+  users, backup/restore, audit, alerts, `me/`).
+- DNS server bắt buộc `https://` tới controller (trừ loopback).
+- `install.sh` kiểm tra SHA256 của binary với `SHA256SUMS` của release; dùng
+  `--node-token-file` / `--dns-token-file` để token không lộ trên dòng lệnh.

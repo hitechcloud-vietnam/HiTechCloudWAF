@@ -366,16 +366,34 @@ func (s *Site) Normalize() error {
 // engine-internal IDs (100000-199999).
 var ruleIDRe = regexp.MustCompile(`(?i)\bid\s*:\s*'?(\d+)`)
 
+var allowedDirectives = map[string]bool{
+	"secrule": true, "secaction": true, "secmarker": true,
+	"secruleremovebyid": true, "secruleremovebytag": true, "secruleremovebymsg": true,
+	"secruleupdatetargetbyid": true, "secruleupdatetargetbytag": true, "secruleupdatetargetbymsg": true,
+	"secruleupdateactionbyid": true,
+}
+
+var fileOpRe = regexp.MustCompile(`(?i)@(pmfromfile|pmf|ipmatchfromfile|ipmatchf|inspectfile|validateschema|validatedtd|rbl)\b`)
+
 func checkCustomRules(rules string) error {
 	if len(rules) > 64<<10 {
 		return errors.New("custom_rules is larger than 64 KiB")
 	}
-	for _, line := range strings.Split(rules, "\n") {
-		l := strings.ToLower(strings.TrimSpace(line))
-		// Rules come over the API and are replicated between nodes; they must
-		// not read local files.
-		if strings.HasPrefix(l, "include") || strings.Contains(l, "@pmfromfile") || strings.Contains(l, "@ipmatchfromfile") || strings.Contains(l, "@inspectfile") {
-			return errors.New("custom_rules may not include or read files")
+	// Rules come over the API and are replicated between nodes: only rule
+	// directives are accepted (no logs, uploads, data dirs or includes that
+	// touch the local disk) and no operator may read files or the network.
+	if m := fileOpRe.FindString(rules); m != "" {
+		return fmt.Errorf("custom_rules may not use %s", m)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(rules, "\\\n", " "), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		d, _, _ := strings.Cut(l, " ")
+		d, _, _ = strings.Cut(d, "\t")
+		if !allowedDirectives[strings.ToLower(d)] {
+			return fmt.Errorf("custom_rules may not use the %s directive", d)
 		}
 	}
 	for _, m := range ruleIDRe.FindAllStringSubmatch(rules, -1) {
