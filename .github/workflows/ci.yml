@@ -33,6 +33,30 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go test -race ./...
 
+  e2e:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: waf/go.mod
+          cache-dependency-path: |
+            waf/go.sum
+            cluster/go.sum
+      - name: vet
+        working-directory: e2e
+        run: go vet ./...
+      - name: gofmt
+        working-directory: e2e
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: end-to-end
+        working-directory: e2e
+        env:
+          HCW_E2E: "1"
+        run: go test -count=1 -v -timeout 8m ./...
+
   vulncheck:
     runs-on: ubuntu-latest
     strategy:
