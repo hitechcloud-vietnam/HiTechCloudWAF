@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/engine"
 )
+
+const maxClusterEvents = 5000
 
 //go:embed dashboard.html
 var dashboardHTML string
@@ -46,6 +49,9 @@ type Server struct {
 	probe *http.Client
 
 	primary *engine.Client
+
+	evMu   sync.Mutex
+	events []api.Event // newest last, capped at maxClusterEvents
 
 	snapMu   sync.RWMutex
 	snap     *api.Snapshot
@@ -108,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /v1/nodes/{id}", admin(s.patchNode))
 	mux.Handle("DELETE /v1/nodes/{id}", admin(s.deleteNode))
 	mux.Handle("GET /v1/pools", admin(s.pools))
+	mux.Handle("GET /v1/events", admin(s.listEvents))
 	mux.Handle("GET /v1/sync", admin(s.syncStatus))
 	mux.Handle("POST /v1/sync", admin(s.triggerSync))
 	mux.Handle("GET /v1/pools/{pool}/endpoints", dns(func(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +203,12 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	evs := hb.Events
+	hb.Events = nil // events are kept in memory only, not in the node state
+	if len(evs) > 200 {
+		evs = evs[:200]
+	}
+	s.addEvents(hb.ID, evs)
 	n, err := s.store.Heartbeat(hb)
 	if err != nil {
 		s.log.Error("persist node", "node", hb.ID, "err", err)
@@ -208,6 +221,46 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.snapMu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{"node": n.ID, "config_revision": rev})
+}
+
+func (s *Server) addEvents(node string, evs []api.Event) {
+	if len(evs) == 0 {
+		return
+	}
+	s.evMu.Lock()
+	defer s.evMu.Unlock()
+	// Agents send newest first; store oldest first.
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		e.Node = node
+		if len(e.URI) > 512 {
+			e.URI = e.URI[:512]
+		}
+		if len(e.Tags) > 10 {
+			e.Tags = e.Tags[:10]
+		}
+		s.events = append(s.events, e)
+	}
+	if over := len(s.events) - maxClusterEvents; over > 0 {
+		s.events = append([]api.Event(nil), s.events[over:]...)
+	}
+}
+
+func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	node := r.URL.Query().Get("node")
+	s.evMu.Lock()
+	out := make([]api.Event, 0, limit)
+	for i := len(s.events) - 1; i >= 0 && len(out) < limit; i-- {
+		if node == "" || s.events[i].Node == node {
+			out = append(out, s.events[i])
+		}
+	}
+	s.evMu.Unlock()
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, _ *http.Request) {

@@ -53,11 +53,18 @@
       <div class="card"><span class="muted">Healthy</span><b id="c-ok">–</b></div>
       <div class="card"><span class="muted">Lỗi</span><b id="c-bad">–</b></div>
       <div class="card"><span class="muted">Cấu hình (revision)</span><b id="c-rev" style="font-size:16px">–</b><span class="muted" id="c-sync"></span></div>
+      <div class="card"><span class="muted">Request (toàn cluster)</span><b id="c-req">–</b></div>
+      <div class="card"><span class="muted">Bị chặn (toàn cluster)</span><b id="c-blk">–</b></div>
     </div>
     <h2>Nodes <button class="ghost" id="sync">Đồng bộ ngay</button></h2>
     <div class="wrap"><table>
       <thead><tr><th>Trạng thái</th><th>Node</th><th>Region</th><th>Pools</th><th>IPv4</th><th>Weight</th><th>Load</th><th>RAM trống</th><th>Probe</th><th>Config</th><th>Heartbeat</th><th></th></tr></thead>
       <tbody id="nodes"></tbody>
+    </table></div>
+    <h2>Sự kiện tấn công toàn cluster</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Thời gian</th><th>Node</th><th>Host</th><th>IP</th><th>Request</th><th>Loại</th><th>Phân loại</th></tr></thead>
+      <tbody id="events"></tbody>
     </table></div>
     <h2>DNS pools</h2>
     <div class="wrap"><table>
@@ -80,7 +87,24 @@
       .then(function (r) { if (r.status === 401) { setToken(""); show(); throw new Error("unauthorized"); } if (!r.ok) { return r.text().then(function (t) { throw new Error(t); }); } return r.status === 204 || r.status === 202 ? null : r.json(); });
   }
   function show() { var t = !!token(); $("login").hidden = t; $("app").hidden = !t; $("logout").hidden = !t; }
+  function renderEvents(evs) {
+    var tb = $("events"); tb.textContent = "";
+    evs.slice(0, 50).forEach(function (e) {
+      var tr = document.createElement("tr");
+      tr.appendChild(td(new Date(e.time).toLocaleString("vi-VN")));
+      tr.appendChild(td(e.node)); tr.appendChild(td(e.host));
+      tr.appendChild(td(e.client_ip + (e.country ? " · " + e.country : "")));
+      tr.appendChild(td((e.method + " " + e.uri).slice(0, 90)));
+      tr.appendChild(e.action === "monitor" ? td(e.kind + " (giám sát)", "warn") : td(e.kind, "bad"));
+      tr.appendChild(td((e.tags || []).join(", ")));
+      tb.appendChild(tr);
+    });
+    if (!evs.length) { var tr = document.createElement("tr"); var c = td("Chưa có sự kiện."); c.colSpan = 7; tr.appendChild(c); tb.appendChild(tr); }
+  }
   function render(nodes, pools, sync) {
+    var req = 0, blk = 0;
+    nodes.forEach(function (n) { if (n.traffic) { req += n.traffic.requests; blk += n.traffic.blocked + n.traffic.rate_limited + n.traffic.acl_blocked + n.traffic.bot_failed; } });
+    $("c-req").textContent = req; $("c-blk").textContent = blk;
     var ok = 0, tb = $("nodes"); tb.textContent = "";
     nodes.forEach(function (n) {
       if (n.healthy && !n.drain) ok++;
@@ -118,8 +142,8 @@
   function err(e) { $("err").textContent = String(e.message || e); }
   function load() {
     if (!token()) return;
-    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync")])
-      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); }).catch(err);
+    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync"), api("GET", "/v1/events?limit=50")])
+      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); renderEvents(r[3]); }).catch(err);
   }
   $("go").onclick = function () { setToken($("tok").value.trim()); $("tok").value = ""; show(); load(); };
   $("tok").onkeydown = function (e) { if (e.key === "Enter") $("go").onclick(); };

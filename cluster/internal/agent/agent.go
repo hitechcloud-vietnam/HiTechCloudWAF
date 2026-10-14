@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +39,13 @@ type Agent struct {
 
 	appliedRev string
 	configErr  string
+
+	// lastEvent is the newest engine event already reported.
+	lastEvent   string
+	eventsKnown bool
 }
+
+const maxEventsPerBeat = 100
 
 // New builds an agent and fills defaults that need the environment.
 func New(cfg *config.Agent, log *slog.Logger) (*Agent, error) {
@@ -154,16 +161,88 @@ func (a *Agent) Tick(ctx context.Context) error {
 		}
 		cancel()
 	}
+	if a.engine != nil && hb.EngineHealthy {
+		hb.Traffic, hb.Events = a.collectTraffic(ctx)
+	}
 	var resp struct {
 		ConfigRevision string `json:"config_revision"`
 	}
 	if err := a.call(ctx, http.MethodPost, "/v1/heartbeat", hb, &resp); err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
+	if len(hb.Events) > 0 {
+		a.lastEvent = hb.Events[0].ID
+	}
 	if a.cfg.ApplyConfig && resp.ConfigRevision != "" && resp.ConfigRevision != a.appliedRev {
 		a.applyConfig(ctx)
 	}
 	return nil
+}
+
+// collectTraffic reads counters and new events from engines that provide
+// /api/open/stats and /api/open/events (HiTechCloud WAF engine). Engines
+// without them simply report nothing.
+func (a *Agent) collectTraffic(ctx context.Context) (*api.Traffic, []api.Event) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var traffic *api.Traffic
+	if v, err := a.engine.Do(cctx, http.MethodGet, "/api/open/stats", "", nil); err == nil {
+		if m, ok := v.(map[string]any); ok {
+			if per, ok := m["data"].(map[string]any); ok {
+				traffic = &api.Traffic{}
+				for _, c := range per {
+					cm, _ := c.(map[string]any)
+					traffic.Requests += num(cm["requests"])
+					traffic.Blocked += num(cm["blocked"])
+					traffic.Monitored += num(cm["monitored"])
+					traffic.RateLimited += num(cm["rate_limited"])
+					traffic.ACLBlocked += num(cm["acl_blocked"])
+					traffic.BotFailed += num(cm["bot_failed"])
+				}
+			}
+		}
+	}
+	v, err := a.engine.Do(cctx, http.MethodGet, "/api/open/events", "limit="+strconv.Itoa(maxEventsPerBeat), nil)
+	if err != nil {
+		return traffic, nil
+	}
+	raw, _ := json.Marshal(v)
+	var env struct {
+		Data struct {
+			Data []api.Event `json:"data"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return traffic, nil
+	}
+	list := env.Data.Data // newest first
+	if !a.eventsKnown {
+		// First contact: report only a few recent events, not the backlog.
+		a.eventsKnown = true
+		if len(list) > 20 {
+			list = list[:20]
+		}
+		return traffic, list
+	}
+	var fresh []api.Event
+	for _, e := range list {
+		if e.ID == a.lastEvent {
+			break
+		}
+		fresh = append(fresh, e)
+	}
+	return traffic, fresh
+}
+
+func num(v any) uint64 {
+	switch n := v.(type) {
+	case json.Number:
+		u, _ := strconv.ParseUint(n.String(), 10, 64)
+		return u
+	case float64:
+		return uint64(n)
+	}
+	return 0
 }
 
 func (a *Agent) applyConfig(ctx context.Context) {

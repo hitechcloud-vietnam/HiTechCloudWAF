@@ -30,6 +30,38 @@ type Heartbeat struct {
 	ConfigError    string `json:"config_error,omitempty"`
 
 	Stats Stats `json:"stats"`
+
+	// Traffic counters of the local WAF engine since its start (summed over
+	// sites), when the engine exposes them.
+	Traffic *Traffic `json:"traffic,omitempty"`
+	// Events are security events seen since the previous heartbeat.
+	Events []Event `json:"events,omitempty"`
+}
+
+// Traffic is a node's request counters.
+type Traffic struct {
+	Requests    uint64 `json:"requests"`
+	Blocked     uint64 `json:"blocked"`
+	Monitored   uint64 `json:"monitored"`
+	RateLimited uint64 `json:"rate_limited"`
+	ACLBlocked  uint64 `json:"acl_blocked"`
+	BotFailed   uint64 `json:"bot_failed"`
+}
+
+// Event is a security event reported by a node (subset of the engine's).
+type Event struct {
+	ID       string    `json:"id"`
+	Node     string    `json:"node,omitempty"`
+	Time     time.Time `json:"time"`
+	Host     string    `json:"host"`
+	ClientIP string    `json:"client_ip"`
+	Country  string    `json:"country,omitempty"`
+	Method   string    `json:"method"`
+	URI      string    `json:"uri"`
+	Kind     string    `json:"kind"`
+	Action   string    `json:"action"`
+	Status   int       `json:"status"`
+	Tags     []string  `json:"tags,omitempty"`
 }
 
 // Stats are point-in-time host metrics from the node.

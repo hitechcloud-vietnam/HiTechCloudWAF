@@ -46,7 +46,8 @@ Lộ trình (chưa có): mã hóa HTML/JS động.
   dịch ID tham chiếu chéo.
 - DNS authoritative: chỉ trả IP node khỏe, weighted, ưu tiên region theo EDNS
   Client Subnet, failover tự động.
-- Dashboard whitelabel (tên, màu, logo).
+- Dashboard whitelabel (tên, màu, logo), thống kê và sự kiện tấn công tập trung
+  từ mọi node.
 
 **Tích hợp:**
 

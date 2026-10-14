@@ -55,6 +55,18 @@ Token API của từng engine chỉ nằm trên node đó, không đi qua contro
 > được đối chiếu với tài liệu API của phiên bản engine đang chạy. Bật `prune`
 > sau khi đã kiểm tra.
 
+### Thống kê và sự kiện tập trung
+
+Với engine HiTechCloud, mỗi heartbeat của agent gửi kèm:
+
+- bộ đếm request/chặn của node;
+- các sự kiện tấn công mới kể từ lần trước (tối đa 100 mỗi lần).
+
+Controller cộng dồn thành số liệu toàn cluster và giữ 5000 sự kiện gần nhất
+trong bộ nhớ. Xem qua dashboard hoặc `GET /v1/events?limit=&node=` (admin).
+
+![Dashboard cluster](images/cluster-dashboard.png)
+
 ## Triển khai nhanh
 
 ```bash
@@ -89,6 +101,7 @@ Dashboard: `https://controller.example.vn:7443/`, đăng nhập bằng `admin.to
 | `GET /v1/config/snapshot` | node | snapshot cấu hình |
 | `GET /v1/nodes`, `GET/PATCH/DELETE /v1/nodes/{id}` | admin | quản lý node (`{"drain":true}`, `{"weight_override":50}`) |
 | `GET /v1/pools` | admin | các pool + endpoint |
+| `GET /v1/events` | admin | sự kiện tấn công toàn cluster |
 | `GET /v1/pools/{pool}/endpoints` | dns/admin | dùng cho DNS |
 | `GET/POST /v1/sync` | admin | trạng thái / đồng bộ ngay |
 
