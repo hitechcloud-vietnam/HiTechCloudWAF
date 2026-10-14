@@ -175,6 +175,7 @@
         if (s.auth && s.auth.enabled) feats.push("mật khẩu");
         if ((s.ip_allow || []).length) feats.push("allowlist");
         if ((s.ip_deny || []).length) feats.push("deny " + s.ip_deny.length);
+        if ((s.country_allow || []).length || (s.country_deny || []).length) feats.push("geo");
         tb.appendChild(el("tr", { class: "click", onclick: function () { location.hash = "#/sites/" + s.id; } }, [
           el("td", {}, [el("b", { text: s.name }), el("div", { class: "muted mono", text: s.server_names.join(", ") })]),
           el("td", { class: "mono", text: s.ports.join(", ") }),
@@ -222,7 +223,9 @@
         field("Trong (giây)", el("input", { id: "f-rlw", type: "number", min: "0", value: rl.window_sec || 60 })),
         field("Chặn trong (giây)", el("input", { id: "f-rlb", type: "number", min: "0", value: rl.block_sec || 60 })),
         field("IP cho phép (allowlist)", el("textarea", { id: "f-allow", value: (s.ip_allow || []).join("\n") }), "Nếu có, chỉ các IP/CIDR này được truy cập."),
-        field("IP chặn (denylist)", el("textarea", { id: "f-deny", value: (s.ip_deny || []).join("\n") }))])]),
+        field("IP chặn (denylist)", el("textarea", { id: "f-deny", value: (s.ip_deny || []).join("\n") })),
+        field("Chỉ cho phép quốc gia", el("input", { id: "f-ca", value: (s.country_allow || []).join(", "), placeholder: "VN" }), "Mã ISO 2 ký tự, cách nhau dấu phẩy. Cần geoip_db trên node."),
+        field("Chặn quốc gia", el("input", { id: "f-cd", value: (s.country_deny || []).join(", "), placeholder: "RU, KP" }))])]),
       el("fieldset", {}, [el("legend", { text: "Anti-bot & mật khẩu" }), el("div", { class: "grid2" }, [
         el("div", {}, [check("Bật anti-bot challenge (JS proof-of-work)", "f-bot", bot.enabled),
           field("Độ khó", el("input", { id: "f-botd", type: "number", min: "8", max: "24", value: bot.difficulty || 16 }), "16 ≈ dưới 1 giây; +1 gấp đôi thời gian."),
@@ -250,6 +253,7 @@
         anomaly_threshold: num(g("f-thr"), 5), disabled_rules: nums(g("f-dis")),
         rate_limit: { requests: num(g("f-rl"), 0), window_sec: num(g("f-rlw"), 60), block_sec: num(g("f-rlb"), 60) },
         ip_allow: lines(g("f-allow")), ip_deny: lines(g("f-deny")),
+        country_allow: lines(g("f-ca").toUpperCase()), country_deny: lines(g("f-cd").toUpperCase()),
         bot_challenge: { enabled: $("f-bot").checked, difficulty: num(g("f-botd"), 16), ttl_sec: num(g("f-bott"), 3600), exclude_paths: lines(g("f-botx")) },
         auth: { enabled: $("f-auth").checked, password_hash: au.password_hash || "", ttl_sec: num(g("f-autht"), 28800), exclude_paths: lines(g("f-authx")) },
         upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
@@ -284,7 +288,7 @@
         (d.data || []).forEach(function (e) {
           var cls = e.action === "monitor" ? "warn" : e.kind === "waf" ? "bad" : "info";
           tb.appendChild(el("tr", { class: "click", onclick: function () { showEvent(detail, e); } }, [
-            el("td", { text: fmtTime(e.time) }), el("td", { text: siteName(e.site_id) }), el("td", { class: "mono", text: e.client_ip }),
+            el("td", { text: fmtTime(e.time) }), el("td", { text: siteName(e.site_id) }), el("td", { class: "mono", text: e.client_ip + (e.country ? " · " + e.country : "") }),
             el("td", { class: "mono", text: e.method + " " + e.uri.slice(0, 120) }),
             el("td", {}, [el("span", { class: "pill " + cls, text: e.kind + (e.action === "monitor" ? " (giám sát)" : "") })]),
             el("td", { text: (e.tags || []).join(", ") })]));
@@ -317,7 +321,7 @@
     }
     box.appendChild(el("div", { class: "card" }, [
       el("div", { class: "row" }, [el("b", { text: "Sự kiện " + e.id }), el("span", { class: "spacer" }), el("button", { class: "btn ghost small", text: "Đóng", onclick: function () { clear(box); } })]),
-      el("p", { class: "mono detail", text: e.method + " " + e.host + e.uri + "\nIP: " + e.client_ip + "\nUser-Agent: " + (e.user_agent || "") + "\nHTTP " + e.status + " · " + fmtTime(e.time) }),
+      el("p", { class: "mono detail", text: e.method + " " + e.host + e.uri + "\nIP: " + e.client_ip + (e.country ? " (" + e.country + ")" : "") + "\nUser-Agent: " + (e.user_agent || "") + "\nHTTP " + e.status + " · " + fmtTime(e.time) }),
       (e.rules || []).length ? el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Rule", "Mô tả", "Dữ liệu khớp", "Mức độ"].map(function (h) { return el("th", { text: h }); }))]), rules])]) : null,
       el("div", { class: "spacer" }), actions
     ]));

@@ -37,6 +37,7 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
 | `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
+| `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
 
 ### Anti-bot challenge (`bot_challenge`)
@@ -87,6 +88,28 @@ Với cluster, Let's Encrypt giới hạn số chứng chỉ trùng lặp mỗi 
 5 node trở lên, nên dùng chứng chỉ tải lên (`cert_id`) để đồng bộ cho mọi node.
 
 HTTPS hỗ trợ cả HTTP/2.
+
+### Chặn theo quốc gia (GeoIP)
+
+Đặt `geoip_db` trong `waf.yaml` trỏ tới một file MMDB. Có thể dùng:
+
+- **DB-IP Country Lite**: miễn phí, giấy phép CC BY 4.0, phải ghi nguồn
+  db-ip.com. Cài nhanh bằng `install.sh node --geoip`.
+- **MaxMind GeoLite2-Country**: cần tài khoản MaxMind.
+
+Cập nhật database hằng tháng, rồi `systemctl kill -s HUP hcw-waf` để nạp lại
+mà không phải restart.
+
+Cách xử lý từng trường hợp:
+
+| Trường hợp | Kết quả |
+|---|---|
+| IP thuộc quốc gia trong `country_deny` | 403 |
+| Có `country_allow` và IP không thuộc danh sách | 403 |
+| Có `country_allow` và không xác định được quốc gia | 403 |
+| Chỉ có `country_deny` và không xác định được quốc gia (IP nội bộ, thiếu DB) | Cho qua |
+
+Mỗi sự kiện tấn công đều ghi kèm mã quốc gia.
 
 ### Giám sát (Prometheus)
 

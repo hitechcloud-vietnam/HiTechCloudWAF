@@ -24,7 +24,7 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
   lẫn body JSON/form).
 - Chế độ block / monitor / off, paranoia 1–4, tắt rule chặn nhầm theo từng site.
 - Rate limit theo IP (chống brute force, HTTP flood).
-- ACL IP allow/deny (CIDR).
+- ACL IP allow/deny (CIDR), chặn/cho phép theo quốc gia (GeoIP).
 - TLS nhiều chứng chỉ theo SNI, redirect HTTPS.
 - Reverse proxy nhiều upstream có failover.
 - Anti-bot challenge (JS proof-of-work) và auth challenge (mật khẩu, chống brute force).

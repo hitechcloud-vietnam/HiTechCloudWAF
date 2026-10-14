@@ -80,6 +80,10 @@ type Site struct {
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
 	IPDeny  []string `json:"ip_deny"`
+	// CountryAllow, when non-empty, only admits these ISO country codes;
+	// CountryDeny always blocks. Needs geoip_db in the node configuration.
+	CountryAllow []string `json:"country_allow"`
+	CountryDeny  []string `json:"country_deny"`
 
 	// UpstreamHost overrides the Host header sent upstream (default: keep).
 	UpstreamHost string `json:"upstream_host"`
@@ -215,6 +219,15 @@ func (s *Site) Normalize() error {
 				return err
 			}
 			list[i] = n.String()
+		}
+	}
+	for _, list := range [][]string{s.CountryAllow, s.CountryDeny} {
+		for i, c := range list {
+			c = strings.ToUpper(strings.TrimSpace(c))
+			if len(c) != 2 || c[0] < 'A' || c[0] > 'Z' || c[1] < 'A' || c[1] > 'Z' {
+				return fmt.Errorf("invalid country code %q (use ISO 3166-1 alpha-2, e.g. VN)", c)
+			}
+			list[i] = c
 		}
 	}
 	if s.Name == "" {

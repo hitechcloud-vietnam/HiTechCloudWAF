@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # HiTechCloud WAF installer (systemd).
 #
-#   install.sh node        [--public-console CIDR] [--version vX.Y.Z]
+#   install.sh node        [--public-console CIDR] [--geoip] [--version vX.Y.Z]
 #   install.sh agent       --controller https://ctl:7443 --node-token TOKEN --ca ca.crt [--region hn] [--pools web] [--ipv4 PUBLIC_IP]
 #   install.sh controller  --name ctl.example.vn [--ip 203.0.113.5]
 #   install.sh dns         --controller https://ctl:7443 --dns-token TOKEN --ca ca.crt --zone waf.example.vn --ns ns1.waf.example.vn,ns2.waf.example.vn
@@ -24,7 +24,7 @@ START=1
 ROLE=${1:-}
 [ -n "$ROLE" ] && shift || true
 
-PUBLIC_CIDR="" CONTROLLER="" NODE_TOKEN="" DNS_TOKEN="" CA="" REGION="" POOLS="default" IPV4=""
+GEOIP=0 PUBLIC_CIDR="" CONTROLLER="" NODE_TOKEN="" DNS_TOKEN="" CA="" REGION="" POOLS="default" IPV4=""
 NAME="" IP="" ZONE="" NS=""
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -36,6 +36,7 @@ while [ $# -gt 0 ]; do
     --binary) BINARY=$2; shift 2 ;;
     --no-start) START=0; shift ;;
     --public-console) PUBLIC_CIDR=$2; shift 2 ;;
+    --geoip) GEOIP=1; shift ;;
     --controller) CONTROLLER=$2; shift 2 ;;
     --node-token) NODE_TOKEN=$2; shift 2 ;;
     --dns-token) DNS_TOKEN=$2; shift 2 ;;
@@ -163,6 +164,22 @@ acme:
   enabled: false
   email: ""
 EOF
+  fi
+  if [ "$GEOIP" = 1 ]; then
+    # DB-IP Country Lite, CC BY 4.0 (https://db-ip.com) – free, no account.
+    got=0
+    # The file of the current month appears a few days in; fall back to last month.
+    for month in "$(date -u +%Y-%m)" "$(date -u -d "$(date -u +%Y-%m-15) -1 month" +%Y-%m 2>/dev/null || true)"; do
+      [ -n "$month" ] || continue
+      info "downloading DB-IP Country Lite $month"
+      if curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-$month.mmdb.gz" | gunzip > "$ETC/country.mmdb.tmp"; then got=1; break; fi
+    done
+    if [ "$got" = 1 ]; then
+      mv "$ETC/country.mmdb.tmp" "$ETC/country.mmdb"
+      grep -q '^geoip_db:' "$ETC/waf.yaml" || echo "geoip_db: /etc/hcw-waf/country.mmdb" >> "$ETC/waf.yaml"
+    else
+      rm -f "$ETC/country.mmdb.tmp"; echo "warning: GeoIP download failed; set geoip_db later" >&2
+    fi
   fi
   [ -z "$ROOT" ] && chown -R hcwwaf "$ETC" && chmod 600 "$ETC/api.token"
   write_unit hcw-waf hcwwaf "/usr/local/bin/hcw-waf -config /etc/hcw-waf/waf.yaml" CAP_NET_BIND_SERVICE hcw-waf

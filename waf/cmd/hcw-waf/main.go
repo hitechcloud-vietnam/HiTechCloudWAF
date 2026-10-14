@@ -32,6 +32,7 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/geoip"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/mgmt"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
@@ -84,8 +85,30 @@ func run(path string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("challenge secret: %w", err)
 	}
+	var geo *geoip.DB
+	if cfg.GeoIPDB != "" {
+		if geo, err = geoip.Open(cfg.GeoIPDB); err != nil {
+			return fmt.Errorf("geoip_db: %w", err)
+		}
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		go func() {
+			for range hup {
+				if err := geo.Reload(cfg.GeoIPDB); err != nil {
+					log.Error("geoip reload failed", "err", err)
+				} else {
+					log.Info("geoip database reloaded")
+				}
+			}
+		}()
+	}
+	var geoIface interface{ Country(net.IP) string }
+	if geo != nil {
+		geoIface = geo
+	}
 	eng := proxy.New(ctx, proxy.Options{
-		Bind: cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
+		GeoIP: geoIface,
+		Bind:  cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
 		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
 	if cfg.ACME.Enabled {

@@ -41,8 +41,11 @@ type Config struct {
 	// ChallengeSecretFile signs bot/auth passes. Give every node behind the
 	// same DNS name the same file. Default: <data_dir>/challenge.key,
 	// generated on first start.
-	ChallengeSecretFile string      `yaml:"challenge_secret_file"`
-	Brand               proxy.Brand `yaml:"brand"`
+	ChallengeSecretFile string `yaml:"challenge_secret_file"`
+	// GeoIPDB is a MaxMind-format country database (GeoLite2-Country or
+	// DB-IP Country Lite). Reloaded on SIGHUP.
+	GeoIPDB string      `yaml:"geoip_db"`
+	Brand   proxy.Brand `yaml:"brand"`
 
 	// ACME enables automatic certificates for sites with auto_tls.
 	ACME struct {

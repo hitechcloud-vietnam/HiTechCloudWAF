@@ -37,6 +37,8 @@ type Options struct {
 	// Secret signs challenge cookies. Nodes behind the same DNS name should
 	// share it so a visitor keeps their pass when moved between nodes.
 	Secret []byte
+	// GeoIP resolves countries for country_allow/deny and events (optional).
+	GeoIP  interface{ Country(net.IP) string }
 	Log    *slog.Logger
 	Events *events.Log
 }
@@ -430,12 +432,28 @@ func (e *Engine) handler(port int) http.Handler {
 	})
 }
 
+func (e *Engine) country(ip net.IP) string {
+	if e.opt.GeoIP == nil {
+		return ""
+	}
+	return e.opt.GeoIP.Country(ip)
+}
+
 func (e *Engine) event(r *http.Request, s *siteRT, ip net.IP, kind, action string, status int) events.Event {
 	return events.Event{
 		ID: events.NewID(), Time: time.Now().UTC(), SiteID: s.site.ID, Host: r.Host,
-		ClientIP: ip.String(), Method: r.Method, URI: r.URL.RequestURI(), UA: r.UserAgent(),
+		ClientIP: ip.String(), Country: e.country(ip), Method: r.Method, URI: r.URL.RequestURI(), UA: r.UserAgent(),
 		Kind: kind, Action: action, Status: status,
 	}
+}
+
+func hasCode(list []string, c string) bool {
+	for _, x := range list {
+		if x == c {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) block(w http.ResponseWriter, ev events.Event) {
@@ -469,6 +487,15 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 	if len(s.allow) > 0 && !contains(s.allow, ip) {
 		e.block(w, e.event(r, s, ip, "ip_allow", "block", http.StatusForbidden))
 		return
+	}
+	if len(s.site.CountryAllow) > 0 || len(s.site.CountryDeny) > 0 {
+		c := e.country(ip)
+		// Unknown countries (private ranges, no database) are not blocked by
+		// a deny list, but are refused by an allow list.
+		if (c != "" && hasCode(s.site.CountryDeny, c)) || (len(s.site.CountryAllow) > 0 && !hasCode(s.site.CountryAllow, c)) {
+			e.block(w, e.event(r, s, ip, "geo", "block", http.StatusForbidden))
+			return
+		}
 	}
 	if rl := s.site.RateLimit; rl.Requests > 0 {
 		key := strconv.Itoa(s.site.ID) + "|" + ip.String()

@@ -16,6 +16,8 @@ events_kept: 5000                 # in-memory attack events (API /api/open/event
 events_file: /var/lib/hcw-waf/events.jsonl
 # Shared by all nodes behind one DNS name (generate: hcw token > file):
 # challenge_secret_file: /etc/hcw-waf/challenge.key
+# Country database for country_allow/deny (DB-IP Lite or GeoLite2):
+# geoip_db: /etc/hcw-waf/country.mmdb
 # extra_rules_file: /etc/hcw-waf/custom.conf   # your own SecLang rules
 
 brand:
