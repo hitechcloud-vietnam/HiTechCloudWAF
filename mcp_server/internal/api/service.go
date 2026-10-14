@@ -3,21 +3,18 @@ package api
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/secret"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/errors"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
 const attackEventsPath = "/api/open/events"
-const maxTokenFileSize = 16 << 10
 
 // InstanceSource is safe to include in tool output and identifies the exact
 // HiTechCloud WAF instance from which the data was read.
@@ -153,51 +150,7 @@ func newAPIClient(cfg *config.InstanceConfig) (*APIClient, error) {
 }
 
 func loadToken(cfg *config.InstanceConfig) (string, error) {
-	if cfg.TokenFile != "" {
-		dirInfo, err := os.Lstat(filepath.Dir(cfg.TokenFile))
-		if err != nil {
-			return "", errors.Wrap(err, "inspect token_file directory failed")
-		}
-		if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() || dirInfo.Mode().Perm()&0o022 != 0 {
-			return "", errors.New("token_file directory must be a real directory that is not group or world writable")
-		}
-
-		pathInfo, err := os.Lstat(cfg.TokenFile)
-		if err != nil {
-			return "", errors.Wrap(err, "inspect token_file failed")
-		}
-		if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || pathInfo.Mode().Perm()&0o077 != 0 {
-			return "", errors.New("token_file must be a regular file with no group or other permissions")
-		}
-
-		file, err := os.Open(cfg.TokenFile)
-		if err != nil {
-			return "", errors.Wrap(err, "open token_file failed")
-		}
-		defer file.Close()
-		openedInfo, err := file.Stat()
-		if err != nil {
-			return "", errors.Wrap(err, "inspect opened token_file failed")
-		}
-		if !os.SameFile(pathInfo, openedInfo) || !openedInfo.Mode().IsRegular() || openedInfo.Mode().Perm()&0o077 != 0 {
-			return "", errors.New("token_file changed while opening")
-		}
-
-		contents, err := io.ReadAll(io.LimitReader(file, maxTokenFileSize+1))
-		if err != nil {
-			return "", errors.Wrap(err, "read token_file failed")
-		}
-		if len(contents) > maxTokenFileSize {
-			return "", errors.New("token_file exceeds the maximum size")
-		}
-		token := strings.TrimSpace(string(contents))
-		if token == "" {
-			return "", errors.New("token_file is empty")
-		}
-		return token, nil
-	}
-
-	return "", errors.New("token_file is required")
+	return secret.ReadTokenFile(cfg.TokenFile)
 }
 
 // Source returns the non-sensitive identity included in tool results.

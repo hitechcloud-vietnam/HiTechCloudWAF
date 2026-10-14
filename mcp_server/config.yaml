@@ -1,6 +1,20 @@
+# HiTechCloud WAF MCP Server
+#
+# backend: "hcw-waf" (default) talks to the hcw-waf engine management API
+# (X-HCW-API-TOKEN). "legacy" talks to the legacy engine and only offers the
+# read-only get_attack_events tool.
+backend: "hcw-waf"
+
+# true hides every tool that changes a node (set_site_mode, add_denied_ips,
+# remove_denied_ips, disable_site_rules, enable_site_rules, purge_cache).
+read_only: false
+
 server:
   name: "HiTechCloud WAF MCP Server"
-  version: "2.0.0"
+  version: "2.1.0"
+  # "http" (Streamable HTTP on host:port, endpoint /mcp) or "stdio" (for
+  # Claude Desktop / Claude Code). --transport and MCP_TRANSPORT override it.
+  transport: "http"
   # LISTEN_ADDRESS and LISTEN_PORT can override these listener values.
   host: "127.0.0.1"
   port: 5678
@@ -11,28 +25,31 @@ server:
 logger:
   level: "info"
   file_path: ""
+  # Console logs go to stderr (never stdout, which carries MCP on stdio).
   console: true
   caller: false
   development: false
 
-# HiTechCloud WAF API Tokens remain administrator credentials in this release. Keep
-# one token file per instance; the MCP server never returns them to clients.
+# One entry per hcw-waf node. The API token is never written here: use
+# token_file (a 0600 file) or token_env (the name of an environment
+# variable). The MCP server never logs or returns it.
 instances:
   - id: "waf-node-a"
     display_name: "HiTechCloud WAF A"
     base_url: "https://waf-node-a.example:9443"
     token_file: "/run/secrets/waf-node-a.token"
     timeout: 30
-    debug: false
-    # ca_file is the certificate authority that signed the certificate of the
-    # instance. A HiTechCloud WAF console serves the certificate it generated for
-    # itself, which no public authority signed: point this at that certificate
-    # (or at its CA) instead of switching the check off.
+    # ca_file pins the certificate authority of the node. A node without
+    # api.tls_cert serves the self-signed certificate it keeps in
+    # data_dir/api.crt: point ca_file at that file. Verification cannot be
+    # switched off, and plain http:// is only accepted for 127.0.0.1/::1.
     ca_file: ""
+    # read_only: true refuses write tools on this node only.
+    read_only: false
   - id: "waf-node-b"
     display_name: "HiTechCloud WAF B"
     base_url: "https://waf-node-b.example:9443"
-    token_file: "/run/secrets/waf-node-b.token"
+    token_env: "HCW_WAF_NODE_B_TOKEN"
     timeout: 30
-    debug: false
-    ca_file: ""
+    ca_file: "/etc/hitechcloud-waf-mcp/waf-node-b.crt"
+    read_only: true

@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +36,32 @@ type InputSchemaProvider interface {
 	InputSchemaOptions() []markmcp.ToolOption
 }
 
+// Annotations describe how a tool affects the system it talks to.
+type Annotations struct {
+	// ReadOnly tools never change anything.
+	ReadOnly bool
+	// Destructive tools may remove protection or data (meaningful only
+	// when ReadOnly is false).
+	Destructive bool
+	// Idempotent tools have no further effect when repeated with the same
+	// arguments.
+	Idempotent bool
+}
+
+// AnnotationProvider lets a tool declare that it changes state. Tools that
+// do not implement it are registered as read-only.
+type AnnotationProvider interface {
+	Annotations() Annotations
+}
+
+// ToolAnnotations returns the annotations of tool.
+func ToolAnnotations(tool any) Annotations {
+	if provider, ok := tool.(AnnotationProvider); ok {
+		return provider.Annotations()
+	}
+	return Annotations{ReadOnly: true, Idempotent: true}
+}
+
 type Middleware func(http.Handler) http.Handler
 
 type MCPServer struct {
@@ -57,6 +85,19 @@ func NewMCPServer(name, version, instructions string) *MCPServer {
 		server.WithStateLess(true),
 	)
 	return &MCPServer{server: s, transport: transport}
+}
+
+// Server returns the underlying protocol server (in-process clients, tests).
+func (s *MCPServer) Server() *server.MCPServer {
+	return s.server
+}
+
+// ServeStdio speaks MCP over in and out until ctx ends or in is closed.
+// Nothing else may write to out: logs go to stderr.
+func (s *MCPServer) ServeStdio(ctx context.Context, in io.Reader, out io.Writer, errorLog io.Writer) error {
+	stdio := server.NewStdioServer(s.server)
+	stdio.SetErrorLogger(log.New(errorLog, "mcp: ", log.LstdFlags))
+	return stdio.Listen(ctx, in, out)
 }
 
 // Handler exposes exactly one Streamable HTTP endpoint. Legacy /sse and
@@ -131,6 +172,31 @@ func handleToolCall[T any, R any](ctx context.Context, request markmcp.CallToolR
 	return result, nil
 }
 
+// Registrar is a tool with its generic types bound, ready to register.
+type Registrar interface {
+	Name() string
+	Annotations() Annotations
+	Register(s *MCPServer) error
+}
+
+// Wrap binds the generic types of tool.
+func Wrap[T any, R any](tool Tool[T, R]) Registrar {
+	return &wrapped[T, R]{tool: tool}
+}
+
+type wrapped[T any, R any] struct {
+	tool Tool[T, R]
+}
+
+func (w *wrapped[T, R]) Name() string { return w.tool.Name() }
+
+func (w *wrapped[T, R]) Annotations() Annotations { return ToolAnnotations(w.tool) }
+
+func (w *wrapped[T, R]) Register(s *MCPServer) error {
+	logger.Info("Registering tool", logger.String("name", w.tool.Name()))
+	return RegisterTool(s, w.tool)
+}
+
 func RegisterTool[T any, R any](s *MCPServer, tool Tool[T, R]) error {
 	options := []markmcp.ToolOption{
 		markmcp.WithDescription(tool.Description()),
@@ -140,11 +206,12 @@ func RegisterTool[T any, R any](s *MCPServer, tool Tool[T, R]) error {
 	} else {
 		options = append(options, markmcp.WithInputSchema[T]())
 	}
+	annotations := ToolAnnotations(tool)
 	options = append(options,
 		markmcp.WithOutputSchema[R](),
-		markmcp.WithReadOnlyHintAnnotation(true),
-		markmcp.WithDestructiveHintAnnotation(false),
-		markmcp.WithIdempotentHintAnnotation(true),
+		markmcp.WithReadOnlyHintAnnotation(annotations.ReadOnly),
+		markmcp.WithDestructiveHintAnnotation(!annotations.ReadOnly && annotations.Destructive),
+		markmcp.WithIdempotentHintAnnotation(annotations.Idempotent),
 		markmcp.WithOpenWorldHintAnnotation(true),
 	)
 	t := markmcp.NewTool(tool.Name(), options...)

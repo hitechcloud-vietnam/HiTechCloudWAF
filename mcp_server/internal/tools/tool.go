@@ -1,46 +1,32 @@
 package tools
 
 import (
-	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/hcw"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/tools/hcwtools"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/mcp"
 )
 
-// By deferring the concretization of generic types to the Register method,
-// we avoid type inference issues.
-
-// Each Tool is wrapped in a toolWrapper that knows its concrete type,
-// allowing correct passing of generic parameters during registration.
-type ToolWrapper interface {
-	Name() string
-	Register(s *mcp.MCPServer) error
-}
+// ToolWrapper is a tool ready to register on the server.
+type ToolWrapper = mcp.Registrar
 
 var (
 	tools = []ToolWrapper{}
 )
 
+// AppendTool adds tools of the legacy backend.
 func AppendTool[T any, R any](tool ...mcp.Tool[T, R]) {
 	for _, t := range tool {
-		tools = append(tools, &toolWrapper[T, R]{tool: t})
+		tools = append(tools, mcp.Wrap(t))
 	}
 }
 
+// Tools returns the tools of the legacy backend.
 func Tools() []ToolWrapper {
 	return tools
 }
 
-type toolWrapper[T any, R any] struct {
-	tool mcp.Tool[T, R]
-}
-
-func (w *toolWrapper[T, R]) Name() string {
-	return w.tool.Name()
-}
-
-func (w *toolWrapper[T, R]) Register(s *mcp.MCPServer) error {
-	logger.Info("Registering tool",
-		logger.String("name", w.tool.Name()),
-		logger.String("description", w.tool.Description()),
-	)
-	return mcp.RegisterTool(s, w.tool)
+// HCW returns the tools of the hcw-waf backend. readOnly leaves out every
+// tool that changes a node.
+func HCW(reg *hcw.Registry, readOnly bool) []ToolWrapper {
+	return hcwtools.Tools(reg, readOnly)
 }

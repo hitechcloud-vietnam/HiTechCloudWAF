@@ -109,11 +109,12 @@ func Init(cfg *Config) error {
 			))
 		}
 
-		// 控制台输出
+		// Console output goes to stderr: with the stdio transport, stdout
+		// carries the MCP protocol and must hold nothing else.
 		if cfg.Console {
 			cores = append(cores, zapcore.NewCore(
 				zapcore.NewConsoleEncoder(encoderConfig),
-				zapcore.AddSync(os.Stdout),
+				zapcore.AddSync(os.Stderr),
 				level,
 			))
 		}

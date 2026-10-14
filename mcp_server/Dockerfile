@@ -21,7 +21,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=builder /out/mcp-server /app/mcp-server
 COPY config.yaml /etc/hitechcloud-waf-mcp/config.yaml
 
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Ho_Chi_Minh
 
 EXPOSE 5678
 
