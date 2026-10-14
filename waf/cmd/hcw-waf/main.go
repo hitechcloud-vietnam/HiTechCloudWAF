@@ -162,7 +162,7 @@ func run(path string, log *slog.Logger) error {
 	}
 	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log,
 		Brand: cfg.Brand, Version: version, Started: start, Console: console.Handler(), Allow: cfg.APIAllow,
-		Upstreams: func() any { return eng.UpstreamStatus() }}
+		Upstreams: func() any { return eng.UpstreamStatus() }, Cache: eng}
 	if alertSender != nil {
 		api.Alerts = alertSender
 	}

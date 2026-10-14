@@ -185,3 +185,34 @@ func TestAlertsTestEndpointWithoutChannels(t *testing.T) {
 		t.Fatalf("got %d", code)
 	}
 }
+
+type fakeCache struct {
+	site   int
+	prefix string
+}
+
+func (f *fakeCache) PurgeCache(site int, prefix string) int {
+	f.site, f.prefix = site, prefix
+	return 7
+}
+func (f *fakeCache) CacheStats() (int, int64) { return 3, 1024 }
+
+func TestCachePurge(t *testing.T) {
+	st, _ := store.Open(filepath.Join(t.TempDir(), "c.json"))
+	ev, _ := events.New(10, "")
+	fc := &fakeCache{}
+	api := &API{Token: token, Store: st, Events: ev, Cache: fc, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func([]model.Site, []model.Cert) error { return nil }}
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+	code, env := call(t, ts, "POST", "/api/open/cache/purge", map[string]any{"site_id": 2, "prefix": "/static/"}, token)
+	if code != 200 || env.Data.(map[string]any)["removed"].(float64) != 7 || fc.site != 2 || fc.prefix != "/static/" {
+		t.Fatalf("purge: %d %+v %+v", code, env, fc)
+	}
+	if code, _ := call(t, ts, "POST", "/api/open/cache/purge", map[string]any{"prefix": "static"}, token); code != 400 {
+		t.Fatalf("relative prefix accepted: %d", code)
+	}
+	if code, env := call(t, ts, "GET", "/api/open/cache", nil, token); code != 200 || env.Data.(map[string]any)["objects"].(float64) != 3 {
+		t.Fatalf("stats: %d %+v", code, env)
+	}
+}

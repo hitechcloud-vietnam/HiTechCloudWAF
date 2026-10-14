@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -255,6 +254,19 @@ type Site struct {
 	UpstreamHost string `json:"upstream_host"`
 	// UpstreamInsecure skips certificate checks of https upstreams.
 	UpstreamInsecure bool `json:"upstream_insecure"`
+	// LB is the balancing strategy: round_robin (default), weighted,
+	// least_conn, ip_hash or random. Upstreams may end in " weight=N".
+	LB string `json:"lb"`
+	// Sticky pins a browser to one upstream with a signed cookie
+	// (StickyCookie, default hcw_srv; StickyTTLSec 0 = browser session).
+	Sticky       bool   `json:"sticky"`
+	StickyCookie string `json:"sticky_cookie"`
+	StickyTTLSec int    `json:"sticky_ttl_sec"`
+	// RequestHeaders / ResponseHeaders rewrite headers to and from upstreams;
+	// HideServerHeaders strips Server, X-Powered-By and similar banners.
+	RequestHeaders    []HeaderRule `json:"request_headers"`
+	ResponseHeaders   []HeaderRule `json:"response_headers"`
+	HideServerHeaders bool         `json:"hide_server_headers"`
 	// RedirectHTTPS sends plain-HTTP clients to the https port.
 	RedirectHTTPS bool `json:"redirect_https"`
 	// AutoTLS obtains and renews certificates from Let's Encrypt (ACME) for
@@ -333,14 +345,11 @@ func (s *Site) Normalize() error {
 	if err := checkCustomRules(s.CustomRules); err != nil {
 		return err
 	}
-	if len(s.Upstreams) == 0 {
-		return errors.New("upstreams is required")
+	if err := s.normalizeUpstreams(); err != nil {
+		return err
 	}
-	for _, u := range s.Upstreams {
-		pu, err := url.Parse(u)
-		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || (pu.Path != "" && pu.Path != "/") {
-			return fmt.Errorf("invalid upstream %q (use http(s)://host[:port])", u)
-		}
+	if err := s.normalizeHeaders(); err != nil {
+		return err
 	}
 	switch s.Mode {
 	case "":

@@ -280,7 +280,40 @@
     "Hoặc nhập khoá:": "Or enter the key:",
     "2. Nhập mã 6 số đang hiển thị để xác nhận:": "2. Enter the 6-digit code it shows to confirm:",
     "Xác nhận": "Confirm",
-    "Đã bật 2FA": "2FA turned on"
+    "Đã bật 2FA": "2FA turned on",
+
+    // ---- load balancing, headers, cache ----
+    "Cân bằng tải & header": "Load balancing & headers",
+    "Thuật toán cân bằng tải": "Load-balancing method",
+    "Tự động (round-robin; theo trọng số nếu có weight)": "Automatic (round-robin; weighted when weights are set)",
+    "Round-robin (lần lượt)": "Round-robin",
+    "Theo trọng số (weight)": "Weighted",
+    "Ít kết nối nhất": "Least connections",
+    "Theo IP khách (consistent hash)": "Client IP (consistent hash)",
+    "Ngẫu nhiên (theo trọng số)": "Random (weighted)",
+    "Trọng số: thêm “weight=N” (1–100) sau upstream, ví dụ http://10.0.0.1:8080 weight=3. Mọi thuật toán đều bỏ qua upstream lỗi.": "Weights: add “weight=N” (1–100) after an upstream, e.g. http://10.0.0.1:8080 weight=3. Every method skips failed upstreams.",
+    "Sticky session (giữ khách ở một upstream bằng cookie)": "Sticky sessions (keep a client on one upstream with a cookie)",
+    "Tên cookie": "Cookie name",
+    "Hiệu lực cookie (giây)": "Cookie lifetime (seconds)",
+    "0 = đến khi đóng trình duyệt. Upstream lỗi thì khách được chuyển sang upstream khác.": "0 = until the browser closes. Clients of a failed upstream move to another one.",
+    "Header gửi lên upstream": "Headers sent to the upstream",
+    "Mỗi dòng một rule: set/add/remove. Không sửa được Host (dùng “Host gửi lên upstream”), X-Forwarded-* và header hop-by-hop.": "One rule per line: set/add/remove. Host (use “Host header sent upstream”), X-Forwarded-* and hop-by-hop headers cannot be changed.",
+    "Header trả về cho khách": "Headers returned to clients",
+    "Ẩn header Server, X-Powered-By của upstream": "Hide the upstream's Server and X-Powered-By headers",
+    "{0}, dòng {1}: dùng “set Tên: giá trị”, “add Tên: giá trị” hoặc “remove Tên”": "{0}, line {1}: use “set Name: value”, “add Name: value” or “remove Name”",
+    "Cache & nén": "Cache & compression",
+    "Cache response tĩnh trong RAM": "Cache static responses in memory",
+    "Nén gzip cho trình duyệt": "Gzip responses for browsers",
+    "Chỉ cache GET 200 không có Set-Cookie/private/no-store. Nên bật cùng gzip. Nút “Xoá cache” ở cuối form.": "Only GET 200 responses without Set-Cookie/private/no-store are cached. Best used together with gzip. Use “Purge cache” at the end of the form.",
+    "Thời gian cache (giây)": "Cache lifetime (seconds)",
+    "Object tối đa (KB)": "Largest object (KB)",
+    "Cache mọi thứ dưới đường dẫn": "Cache everything under these paths",
+    "Để trống = cache theo phần mở rộng.": "Empty = cache by file extension.",
+    "Phần mở rộng được cache": "Cached file extensions",
+    "Để trống = mặc định (css, js, ảnh, font).": "Empty = defaults (css, js, images, fonts).",
+    "Xoá cache": "Purge cache",
+    "Xoá toàn bộ cache của {0}?": "Purge the whole cache of {0}?",
+    "Đã xoá {0} object khỏi cache": "Removed {0} objects from the cache"
   };
 
   window.HCWI18n = { base: "vi", langs: LANGS, dict: DICT, missing: {} };

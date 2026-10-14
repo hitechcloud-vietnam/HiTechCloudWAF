@@ -101,3 +101,18 @@ func TestRedirectHost(t *testing.T) {
 		t.Errorf("invalid host kept: %q", got)
 	}
 }
+
+func TestCacheNeverReplaysStickyCookie(t *testing.T) {
+	h := newHarness(t, nil, model.Site{ServerNames: []string{"c.vn"}, Sticky: true, Cache: model.CacheConfig{Enabled: true}})
+	r1, _ := h.do(t, "GET", "c.vn", "/app.css", nil, nil, nil)
+	if r1.Header.Get("Set-Cookie") == "" {
+		t.Fatal("first response should pin the client")
+	}
+	r2, _ := h.do(t, "GET", "c.vn", "/app.css", nil, nil, nil)
+	if r2.Header.Get("X-HCW-Cache") != "HIT" {
+		t.Fatalf("second request not served from cache: %q", r2.Header.Get("X-HCW-Cache"))
+	}
+	if c := r2.Header.Get("Set-Cookie"); c != "" {
+		t.Fatalf("cached response replays a cookie: %s", c)
+	}
+}

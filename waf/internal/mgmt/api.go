@@ -46,6 +46,11 @@ type API struct {
 	Allow []*net.IPNet
 	// Upstreams reports upstream health (optional).
 	Upstreams func() any
+	// Cache is the engine response cache (optional).
+	Cache interface {
+		PurgeCache(siteID int, prefix string) int
+		CacheStats() (objects int, bytes int64)
+	}
 	// Audit records administrative actions (optional).
 	Audit *audit.Log
 	// Users enables console accounts; nil means API token only.
@@ -245,6 +250,33 @@ func (a *API) Handler() http.Handler {
 			return
 		}
 		ok(w, "sent")
+	})
+	mux.HandleFunc("GET /api/open/cache", func(w http.ResponseWriter, _ *http.Request) {
+		objects, size := 0, int64(0)
+		if a.Cache != nil {
+			objects, size = a.Cache.CacheStats()
+		}
+		ok(w, map[string]any{"objects": objects, "bytes": size})
+	})
+	// Purging does not change the configuration, so it is not re-applied.
+	mux.HandleFunc("POST /api/open/cache/purge", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			SiteID int    `json:"site_id"` // 0 = every site
+			Prefix string `json:"prefix"`  // request URI prefix, "" = everything
+		}
+		if err := decode(r, &b); err != nil {
+			fail(w, http.StatusBadRequest, "invalid", err)
+			return
+		}
+		if b.Prefix != "" && !strings.HasPrefix(b.Prefix, "/") {
+			fail(w, http.StatusBadRequest, "invalid", errors.New("prefix must start with /"))
+			return
+		}
+		n := 0
+		if a.Cache != nil {
+			n = a.Cache.PurgeCache(b.SiteID, b.Prefix)
+		}
+		ok(w, map[string]int{"removed": n})
 	})
 	mux.HandleFunc("GET /api/open/brand", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Brand) })
 	mux.HandleFunc("GET /api/open/info", func(w http.ResponseWriter, _ *http.Request) {
