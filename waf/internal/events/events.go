@@ -55,6 +55,48 @@ type Log struct {
 	enc  *json.Encoder
 
 	counters map[int]*Counters
+
+	// per-minute totals for the last 60 minutes
+	series [60]Bucket
+}
+
+// Bucket is one minute of traffic.
+type Bucket struct {
+	Minute    int64  `json:"minute"` // unix seconds, start of the minute
+	Requests  uint64 `json:"requests"`
+	Blocked   uint64 `json:"blocked"`
+	Monitored uint64 `json:"monitored"`
+	RateLimit uint64 `json:"rate_limited"`
+	ACL       uint64 `json:"acl_blocked"`
+	Bot       uint64 `json:"bot_failed"`
+}
+
+// bucket returns the bucket of the current minute, recycling stale ones.
+func (l *Log) bucket(now time.Time) *Bucket {
+	m := now.Unix() / 60 * 60
+	b := &l.series[(m/60)%60]
+	if b.Minute != m {
+		*b = Bucket{Minute: m}
+	}
+	return b
+}
+
+// Series returns the last 60 minutes, oldest first, with empty minutes
+// filled in.
+func (l *Log) Series(now time.Time) []Bucket {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cur := now.Unix() / 60 * 60
+	out := make([]Bucket, 0, 60)
+	for i := 59; i >= 0; i-- {
+		m := cur - int64(i)*60
+		b := l.series[(m/60)%60]
+		if b.Minute != m {
+			b = Bucket{Minute: m}
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // Counters are per-site totals since start.
@@ -64,6 +106,7 @@ type Counters struct {
 	Monitored uint64 `json:"monitored"`
 	RateLimit uint64 `json:"rate_limited"`
 	ACL       uint64 `json:"acl_blocked"`
+	Bot       uint64 `json:"bot_failed"`
 }
 
 // New creates a log holding size events. path may be empty.
@@ -95,6 +138,7 @@ func (l *Log) counter(site int) *Counters {
 func (l *Log) CountRequest(site int) {
 	l.mu.Lock()
 	l.counter(site).Requests++
+	l.bucket(time.Now()).Requests++
 	l.mu.Unlock()
 }
 
@@ -103,15 +147,23 @@ func (l *Log) Add(e Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	c := l.counter(e.SiteID)
+	b := l.bucket(e.Time)
 	switch {
 	case e.Kind == "rate_limit":
 		c.RateLimit++
+		b.RateLimit++
 	case e.Kind == "ip_deny" || e.Kind == "ip_allow":
 		c.ACL++
+		b.ACL++
+	case e.Kind == "bot":
+		c.Bot++
+		b.Bot++
 	case e.Action == "monitor":
 		c.Monitored++
+		b.Monitored++
 	default:
 		c.Blocked++
+		b.Blocked++
 	}
 	l.ring[l.next] = e
 	l.next = (l.next + 1) % len(l.ring)

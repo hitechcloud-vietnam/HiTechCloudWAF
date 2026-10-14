@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HiTechCloud WAF Console</title>
+<link rel="icon" href="/mark.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <img src="/logo.svg" alt="" class="login-logo">
+    <h1 class="brand-name">HiTechCloud WAF</h1>
+    <p class="muted">Nhập API token của node để quản trị.</p>
+    <input id="token" type="password" placeholder="API token" autocomplete="current-password" required>
+    <button type="submit" class="btn primary block">Đăng nhập</button>
+    <p id="login-err" class="err"></p>
+  </form>
+</div>
+
+<div id="app" class="layout" hidden>
+  <aside class="side">
+    <div class="side-brand"><img src="/mark.svg" alt=""><span class="brand-name">HiTechCloud WAF</span></div>
+    <nav>
+      <a href="#/dashboard" data-nav="dashboard">Tổng quan</a>
+      <a href="#/sites" data-nav="sites">Ứng dụng</a>
+      <a href="#/events" data-nav="events">Sự kiện tấn công</a>
+      <a href="#/certs" data-nav="certs">Chứng chỉ</a>
+    </nav>
+    <div class="side-foot">
+      <span id="ver" class="muted"></span>
+      <button id="logout" class="btn ghost small">Đăng xuất</button>
+    </div>
+  </aside>
+  <main id="view" class="main"></main>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

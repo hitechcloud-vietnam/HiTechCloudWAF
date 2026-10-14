@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="96" viewBox="0 0 360 96" role="img" aria-label="HiTechCloud WAF">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+  </defs>
+  <path d="M48 8 82 20v26c0 22-14.5 36-34 42C28.5 82 14 68 14 46V20Z" fill="url(#g)"/>
+  <path d="M33 47.5 44 58l21-23" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="98" y="47" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="30" font-weight="700" fill="#0F172A">HiTechCloud</text>
+  <text x="99" y="76" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20" font-weight="600" letter-spacing="6" fill="#1D4ED8">WAF</text>
+</svg>

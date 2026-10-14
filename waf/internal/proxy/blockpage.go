@@ -7,9 +7,9 @@ import (
 
 // Brand customises the page shown to blocked visitors.
 type Brand struct {
-	Name       string `yaml:"name"`
-	Color      string `yaml:"color"`
-	SupportURL string `yaml:"support_url"`
+	Name       string `yaml:"name" json:"name"`
+	Color      string `yaml:"color" json:"color"`
+	SupportURL string `yaml:"support_url" json:"support_url"`
 }
 
 var blockTmpl = template.Must(template.New("block").Parse(`<!doctype html>

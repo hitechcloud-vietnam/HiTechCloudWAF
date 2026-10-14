@@ -29,6 +29,8 @@ type Config struct {
 		// in DataDir.
 		TLSCert string `yaml:"tls_cert"`
 		TLSKey  string `yaml:"tls_key"`
+		// Allow limits who may reach the API and console (IPs/CIDRs).
+		Allow []string `yaml:"allow"`
 	} `yaml:"api"`
 
 	BodyLimitKB    int      `yaml:"body_limit_kb"`
@@ -43,6 +45,7 @@ type Config struct {
 	Brand               proxy.Brand `yaml:"brand"`
 
 	TrustedNets []*net.IPNet `yaml:"-"`
+	APIAllow    []*net.IPNet `yaml:"-"`
 	ExtraRules  string       `yaml:"-"`
 }
 
@@ -83,6 +86,13 @@ func Load(path string) (*Config, error) {
 			return nil, err
 		}
 		c.TrustedNets = append(c.TrustedNets, n)
+	}
+	for _, p := range c.API.Allow {
+		n, err := model.ParseCIDR(p)
+		if err != nil {
+			return nil, err
+		}
+		c.APIAllow = append(c.APIAllow, n)
 	}
 	if c.ExtraRulesFile != "" {
 		r, err := os.ReadFile(c.ExtraRulesFile)

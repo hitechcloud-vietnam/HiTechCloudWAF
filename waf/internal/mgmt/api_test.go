@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -122,5 +123,40 @@ func TestStoreReload(t *testing.T) {
 	s, _ := st2.CreateSite(model.Site{ServerNames: []string{"b.vn"}, Upstreams: []string{"http://1.1.1.1"}})
 	if s.ID != 2 {
 		t.Fatalf("id = %d", s.ID)
+	}
+}
+
+func TestConsoleAndBrandArePublicAPIIsNot(t *testing.T) {
+	st, _ := store.Open(filepath.Join(t.TempDir(), "c.json"))
+	ev, _ := events.New(10, "")
+	api := &API{Token: token, Store: st, Events: ev, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Brand: map[string]string{"name": "Acme WAF"}, Console: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "console") }),
+		Apply: func([]model.Site, []model.Cert) error { return nil }}
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+	for path, want := range map[string]int{"/": 200, "/sites/1": 200, "/api/open/brand": 200, "/api/open/info": 401, "/api/open/timeseries": 401, "/api/open/unknown": 401} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	if code, env := call(t, ts, "GET", "/api/open/timeseries", nil, token); code != 200 || len(env.Data.([]any)) != 60 {
+		t.Fatalf("timeseries: %d", code)
+	}
+}
+
+func TestAllowList(t *testing.T) {
+	st, _ := store.Open(filepath.Join(t.TempDir(), "c.json"))
+	ev, _ := events.New(10, "")
+	only, _ := model.ParseCIDR("10.0.0.0/8")
+	api := &API{Token: token, Store: st, Events: ev, Allow: []*net.IPNet{only}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+	if code, _ := call(t, ts, "GET", "/api/open/site", nil, token); code != 403 {
+		t.Fatalf("loopback client not in allow list got %d", code)
 	}
 }

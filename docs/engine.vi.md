@@ -70,6 +70,32 @@ phần header, không quét nội dung. Với body JSON/form, engine kiểm tra
 Gợi ý: bật `monitor` vài ngày để xem log, thêm `disabled_rules` cho các rule
 chặn nhầm, rồi mới chuyển sang `block`.
 
+## Console web quản trị
+
+Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
+(`https://127.0.0.1:9443/`). Đăng nhập bằng API token. Chức năng:
+
+- **Tổng quan:** số request và số lần chặn trong 60 phút, biểu đồ theo phút,
+  các loại tấn công gần đây, thống kê theo từng ứng dụng.
+- **Ứng dụng:** thêm, sửa, xoá; cấu hình đủ chế độ CRS, rate limit, ACL,
+  anti-bot, mật khẩu, HTTPS và các tuỳ chọn proxy.
+- **Sự kiện tấn công:** lọc theo ứng dụng, xem chi tiết rule đã khớp. Có nút
+  **Chặn IP** (thêm IP vào denylist) và **Báo chặn nhầm** (tắt các rule đã
+  khớp cho site đó).
+- **Chứng chỉ:** tải lên chứng chỉ PEM; cảnh báo khi sắp hết hạn.
+
+Tên, màu và logo theo phần `brand` trong cấu hình (whitelabel). Console
+dùng CSP chặt, không có script inline, và chèn mọi dữ liệu qua `textContent`
+để tránh XSS.
+
+Mặc định console chỉ nghe ở `127.0.0.1`. Muốn truy cập từ xa, có hai cách:
+dùng SSH tunnel, hoặc đặt `api.listen: 0.0.0.0:9443` kèm `api.allow` giới
+hạn IP được vào.
+
+![Tổng quan](images/console-dashboard.png)
+![Sự kiện](images/console-events.png)
+![Ứng dụng](images/console-site.png)
+
 ## API quản trị
 
 Mặc định ở `https://127.0.0.1:9443`. Token gửi qua header `X-HCW-API-TOKEN`
@@ -84,6 +110,9 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | GET / POST / PUT / DELETE | `/api/open/cert` | `{"crt": PEM, "key": PEM}` |
 | GET | `/api/open/events?limit=100&site_id=1` | – |
 | GET | `/api/open/stats` | – |
+| GET | `/api/open/timeseries` | – (60 phút gần nhất) |
+| GET | `/api/open/info` | – (version, số site) |
+| GET | `/api/open/brand` | – (không cần token) |
 
 Ví dụ:
 

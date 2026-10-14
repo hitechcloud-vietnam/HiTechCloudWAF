@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/mgmt"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
@@ -91,7 +92,8 @@ func run(path string, log *slog.Logger) error {
 	}
 	log.Info("engine ready", "version", version, "sites", len(st.Sites()), "took", time.Since(start).String())
 
-	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log}
+	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log,
+		Brand: cfg.Brand, Version: version, Started: start, Console: console.Handler(), Allow: cfg.APIAllow}
 	crt, key := cfg.API.TLSCert, cfg.API.TLSKey
 	if crt == "" {
 		crt, key = filepath.Join(cfg.DataDir, "api.crt"), filepath.Join(cfg.DataDir, "api.key")

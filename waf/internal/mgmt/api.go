@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
@@ -25,7 +28,14 @@ type Applier func(sites []model.Site, certs []model.Cert) error
 
 // API serves the management endpoints.
 type API struct {
-	Token  string
+	Token   string
+	Brand   any // served publicly to the console (name, colour)
+	Version string
+	Started time.Time
+	// Console serves the web UI at /; nil disables it.
+	Console http.Handler
+	// Allow restricts the API and console to these networks (empty = any).
+	Allow  []*net.IPNet
 	Store  *store.Store
 	Events *events.Log
 	Apply  Applier
@@ -136,16 +146,43 @@ func (a *API) Handler() http.Handler {
 		ok(w, list[events.Event]{Data: ev, Total: len(ev)})
 	})
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
+	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
+	mux.HandleFunc("GET /api/open/brand", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Brand) })
+	mux.HandleFunc("GET /api/open/info", func(w http.ResponseWriter, _ *http.Request) {
+		ok(w, map[string]any{"version": a.Version, "started_at": a.Started, "sites": len(a.Store.Sites()), "certs": len(a.Store.Certs())})
+	})
+	if a.Console != nil {
+		mux.Handle("GET /", a.Console)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
-		if r.URL.Path != "/api/open/health" && !a.authorized(r) {
+		if len(a.Allow) > 0 && !a.allowed(r.RemoteAddr) {
+			fail(w, http.StatusForbidden, "forbidden", errors.New("management access is not allowed from this address"))
+			return
+		}
+		public := r.URL.Path == "/api/open/health" || r.URL.Path == "/api/open/brand" || !strings.HasPrefix(r.URL.Path, "/api/")
+		if !public && !a.authorized(r) {
 			fail(w, http.StatusUnauthorized, "unauthorized", errors.New("missing or invalid API token"))
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a *API) allowed(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	for _, n := range a.Allow {
+		if ip != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func decode(r *http.Request, v any) error {
