@@ -92,6 +92,8 @@ curl -fsSLO https://github.com/hitechcloud-vietnam/HiTechCloudWAF/releases/lates
 sudo bash install.sh node            # một node WAF + console
 ```
 
+Mục lục toàn bộ tài liệu: [docs/README.md](docs/README.md).
+
 **Hướng dẫn triển khai chi tiết** (một node, Docker, Kubernetes, cluster + DNS,
 bảo mật, giám sát, sao lưu, nâng cấp, xử lý sự cố):
 [docs/deploy.vi.md](docs/deploy.vi.md).
