@@ -1,0 +1,12 @@
+# Values used to render hitechcloud-waf.yaml (single-node WAF, installable
+# without Helm). Regenerate after changing the chart or this file:
+#
+#   deploy/kubernetes/render.sh
+#
+# CI (render.sh --check) fails when hitechcloud-waf.yaml is out of date.
+fullnameOverride: hitechcloud-waf
+
+# Credentials come from a Secret you create (see docs/kubernetes.vi.md), so
+# the published manifest holds no secret values.
+auth:
+  existingSecret: hitechcloud-waf-auth

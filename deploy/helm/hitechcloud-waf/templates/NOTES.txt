@@ -1,0 +1,86 @@
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $console := include "hcw.consoleTarget" . -}}
+{{- $port := .Values.console.service.port -}}
+HiTechCloud WAF {{ .Chart.AppVersion }} is deployed as release "{{ .Release.Name }}" in namespace "{{ $ns }}".
+
+1. Open the web console
+{{- if .Values.console.ingress.enabled }}
+{{- range .Values.console.ingress.hosts }}
+   https://{{ .host }}/
+{{- end }}
+{{- else }}
+   kubectl -n {{ $ns }} port-forward svc/{{ $console }} {{ $port }}:{{ $port }}
+   then browse https://127.0.0.1:{{ $port }}/
+{{- end }}
+{{- if not (include "hcw.apiTLSSecret" .) }}
+   The console certificate is self-signed: accept it in the browser, or set
+   waf.api.tls.generate / waf.api.tls.existingSecret.
+{{- end }}
+
+2. Sign in
+{{- if and .Values.auth.admin.create (include "hcw.singleConsole" .) }}
+   Username: {{ .Values.auth.admin.username }}
+   Password: kubectl -n {{ $ns }} get secret {{ include "hcw.authSecret" . }} -o jsonpath='{.data.admin-password}' | base64 -d; echo
+   (created by the post-install Job {{ $fullname }}-admin; change it and
+   enable two-factor authentication in the console.)
+{{- else }}
+   Log in with the API token, then create accounts on the "Users" page.
+{{- end }}
+   API token (automation, metrics, "API token" login):
+   kubectl -n {{ $ns }} get secret {{ include "hcw.authSecret" . }} -o jsonpath='{.data.api-token}' | base64 -d; echo
+
+3. Send site traffic to the WAF
+{{- if .Values.waf.hostNetwork }}
+   The WAF pods use the node network: sites answer on every node running
+   a WAF pod (ports {{ range $i, $p := .Values.waf.ports }}{{ if $i }}, {{ end }}{{ $p.containerPort }}{{ end }}).
+{{- end }}
+{{- if eq .Values.service.type "LoadBalancer" }}
+   kubectl -n {{ $ns }} get svc {{ $fullname }} -o jsonpath='{.status.loadBalancer.ingress[0]}'; echo
+   Point the DNS records of your sites to that address.
+{{- else if eq .Values.service.type "NodePort" }}
+   kubectl -n {{ $ns }} get svc {{ $fullname }}   # node ports of http/https
+{{- else }}
+   Service {{ $fullname }} is ClusterIP: put a load balancer in front of it.
+{{- end }}
+   Sites created in the console must listen on the container ports
+   {{ range $i, $p := .Values.waf.ports }}{{ if $i }}, {{ end }}{{ $p.containerPort }}{{ end }} (Service ports {{ range $i, $p := .Values.waf.ports }}{{ if $i }}, {{ end }}{{ $p.port }}{{ end }}).
+{{- if ne .Values.service.externalTrafficPolicy "Local" }}
+   Note: externalTrafficPolicy is not Local; the WAF may see node addresses
+   instead of client addresses.
+{{- end }}
+{{- if .Values.controller.enabled }}
+
+4. Cluster controller
+   kubectl -n {{ $ns }} port-forward svc/{{ $fullname }}-controller {{ .Values.controller.service.port }}:{{ .Values.controller.service.port }}
+   Dashboard: https://127.0.0.1:{{ .Values.controller.service.port }}/  (admin token below; certificate issued by the cluster CA)
+   kubectl -n {{ $ns }} get secret {{ include "hcw.clusterSecret" . }} -o jsonpath='{.data.admin-token}' | base64 -d; echo
+   CA for agents/DNS servers outside this cluster:
+   kubectl -n {{ $ns }} get secret {{ include "hcw.caSecret" . }} -o jsonpath='{.data.tls\.crt}' | base64 -d > ca.crt
+{{- if .Values.primary.enabled }}
+   Edit sites and certificates in the PRIMARY console ({{ $fullname }}-primary);
+   they are replicated to every WAF pod.
+{{- end }}
+{{- end }}
+{{- if .Values.dns.enabled }}
+
+5. Authoritative DNS
+   kubectl -n {{ $ns }} get svc {{ $fullname }}-dns
+   Register that address as the NS (glue) of your zone(s).
+{{- end }}
+{{- if and .Values.agent.enabled (not .Values.agent.ipv4) (not .Values.waf.hostNetwork) }}
+
+WARNING: agent.ipv4 is empty and the WAF pods do not use hostNetwork: nodes
+register with their pod address. Set agent.ipv4 to the public address (load
+balancer IP) clients reach, or DNS answers will not be routable.
+{{- end }}
+{{- if and (include "hcw.waf.multi" .) (not .Values.primary.enabled) .Values.console.ingress.enabled }}
+
+WARNING: the console Ingress balances between several WAF pods; console
+sessions are kept per pod. Enable primary.enabled to edit in one place.
+{{- end }}
+{{- if and .Values.waf.hostNetwork (not .Values.waf.api.allow) }}
+
+WARNING: with hostNetwork the console port {{ .Values.waf.api.port }} is open on every node.
+Restrict it with waf.api.allow (include the node and pod networks).
+{{- end }}

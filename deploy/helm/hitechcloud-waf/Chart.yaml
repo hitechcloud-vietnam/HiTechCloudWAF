@@ -1,0 +1,25 @@
+apiVersion: v2
+name: hitechcloud-waf
+description: >-
+  HiTechCloud WAF on Kubernetes: the hcw-waf engine (reverse proxy + OWASP CRS,
+  web console) with optional cluster controller, node agent and
+  health-checked authoritative DNS.
+type: application
+version: 0.1.0
+appVersion: "0.4.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/hitechcloud-vietnam/HiTechCloudWAF
+icon: https://raw.githubusercontent.com/hitechcloud-vietnam/HiTechCloudWAF/main/images/logo.svg
+sources:
+  - https://github.com/hitechcloud-vietnam/HiTechCloudWAF
+keywords:
+  - waf
+  - web-application-firewall
+  - reverse-proxy
+  - owasp-crs
+  - security
+maintainers:
+  - name: Pho Tue SoftWare Solutions JSC / HiTechCloud-VN
+    url: https://hitechcloud.vn
+annotations:
+  artifacthub.io/license: GPL-3.0-only

@@ -81,6 +81,8 @@ sudo bash install.sh node            # một node WAF + console
 Cluster nhiều node, DNS và Docker: [docs/install.vi.md](docs/install.vi.md),
 kiến trúc ở [docs/cluster.vi.md](docs/cluster.vi.md).
 
+Kubernetes (Helm chart hoặc manifest thuần): [docs/kubernetes.vi.md](docs/kubernetes.vi.md).
+
 ## Giấy phép
 
 GPL-3.0, xem [LICENSE.md](LICENSE.md). Đây là bản sửa đổi từ dự án

@@ -1,0 +1,175 @@
+{{- if .Values.dns.enabled }}
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $d := .Values.dns -}}
+{{- $cfg := dict
+  "listen" (printf ":%d" (int $d.containerPort))
+  "controller_url" (default (include "hcw.controllerURL" .) $d.controllerURL)
+  "controller_ca" "/etc/hcw/tls/ca.crt"
+  "token_file" "/etc/hcw/secrets/dns.token"
+  "refresh" $d.refresh
+  "zones" $d.zones
+-}}
+{{- $config := toYaml (dict "dns" $cfg) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-dns
+  labels:
+    {{- include "hcw.componentLabels" (list . "dns") | nindent 4 }}
+data:
+  dns.yaml: |
+    {{- $config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-dns
+  labels:
+    {{- include "hcw.componentLabels" (list . "dns") | nindent 4 }}
+spec:
+  replicas: {{ $d.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list . "dns") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcw.selectorLabels" (list . "dns") | nindent 8 }}
+      annotations:
+        checksum/config: {{ $config | sha256sum }}
+        {{- with $d.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "hcw.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $d.podSecurityContext | nindent 8 }}
+      containers:
+        - name: dns
+          image: {{ include "hcw.image" .Values.clusterImage }}
+          imagePullPolicy: {{ .Values.clusterImage.pullPolicy }}
+          args: [dns, -config, /etc/hcw/dns.yaml]
+          ports:
+            - name: dns-udp
+              containerPort: {{ $d.containerPort }}
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: {{ $d.containerPort }}
+              protocol: TCP
+          # The DNS role has no HTTP endpoint; the TCP listener is checked.
+          livenessProbe:
+            tcpSocket: {port: dns-tcp}
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            tcpSocket: {port: dns-tcp}
+            periodSeconds: 10
+          resources:
+            {{- toYaml $d.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $d.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/hcw/dns.yaml
+              subPath: dns.yaml
+              readOnly: true
+            - name: token
+              mountPath: /etc/hcw/secrets
+              readOnly: true
+            - name: ca
+              mountPath: /etc/hcw/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-dns
+        - name: token
+          secret:
+            secretName: {{ default (include "hcw.clusterSecret" .) $d.tokenSecret }}
+            defaultMode: 0444
+            items:
+              - {key: dns-token, path: dns.token}
+        - name: ca
+          secret:
+            secretName: {{ default (include "hcw.caSecret" .) $d.controllerCASecret }}
+            defaultMode: 0444
+            items:
+              - {key: {{ ternary "ca.crt" "tls.crt" (not (empty $d.controllerCASecret)) }}, path: ca.crt}
+      {{- with $d.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-dns
+  labels:
+    {{- include "hcw.componentLabels" (list . "dns") | nindent 4 }}
+  {{- with $d.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $d.service.type }}
+  {{- if and (has $d.service.type (list "LoadBalancer" "NodePort")) $d.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ $d.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if eq $d.service.type "LoadBalancer" }}
+  {{- with $d.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with $d.service.loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+  {{- end }}
+  {{- with $d.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- include "hcw.selectorLabels" (list . "dns") | nindent 4 }}
+  ports:
+    - name: dns-udp
+      port: {{ $d.service.port }}
+      targetPort: dns-udp
+      protocol: UDP
+    - name: dns-tcp
+      port: {{ $d.service.port }}
+      targetPort: dns-tcp
+      protocol: TCP
+{{- if $d.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-dns
+  labels:
+    {{- include "hcw.componentLabels" (list . "dns") | nindent 4 }}
+spec:
+  maxUnavailable: {{ $d.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list . "dns") | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,90 @@
+{{- if and .Values.auth.admin.create (include "hcw.singleConsole" .) }}
+{{- $fullname := include "hcw.fullname" . -}}
+# Creates the first console administrator through the management API when
+# no account with that name exists yet. Existing accounts are never changed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-admin
+  labels:
+    {{- include "hcw.componentLabels" (list . "admin-bootstrap") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.auth.admin.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.auth.admin.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcw.selectorLabels" (list . "admin-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "hcw.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: {{ include "hcw.image" .Values.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              # The in-cluster call uses the API token; the console certificate
+              # may be self-signed, and busybox wget cannot pin a CA.
+              url="https://{{ include "hcw.consoleTarget" . }}:{{ .Values.console.service.port }}"
+              token=$(cat /run/secrets/hcw/api-token)
+              esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+              i=0
+              until wget -q -T 5 --no-check-certificate -O /dev/null "$url/api/open/health"; do
+                i=$((i+1)); [ "$i" -lt 120 ] || { echo "console not reachable at $url"; exit 1; }
+                sleep 5
+              done
+              users=$(wget -q -T 10 --no-check-certificate --header "X-HCW-API-TOKEN: $token" -O - "$url/api/open/users")
+              if printf '%s' "$users" | grep -q "\"username\":\"$(esc "$ADMIN_USERNAME")\""; then
+                echo "account $ADMIN_USERNAME already exists, nothing to do"
+                exit 0
+              fi
+              body="{\"username\":\"$(esc "$ADMIN_USERNAME")\",\"password\":\"$(esc "$(cat /run/secrets/hcw/admin-password)")\",\"role\":\"admin\"}"
+              wget -q -T 30 --no-check-certificate --header "X-HCW-API-TOKEN: $token" \
+                --header "Content-Type: application/json" --post-data "$body" -O - "$url/api/open/users" >/dev/null
+              echo "account $ADMIN_USERNAME created"
+          env:
+            - name: ADMIN_USERNAME
+              value: {{ .Values.auth.admin.username | quote }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: auth
+              mountPath: /run/secrets/hcw
+              readOnly: true
+      volumes:
+        - name: auth
+          secret:
+            secretName: {{ include "hcw.authSecret" . }}
+            defaultMode: 0444
+            items:
+              - {key: api-token, path: api-token}
+              - {key: admin-password, path: admin-password}
+{{- end }}

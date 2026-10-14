@@ -80,3 +80,36 @@ jobs:
           tags: |
             ghcr.io/hitechcloud-vietnam/${{ matrix.image }}:latest
             ghcr.io/hitechcloud-vietnam/${{ matrix.image }}:${{ github.sha }}
+
+  helm:
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/helm/hitechcloud-waf
+      KUBECONFORM_VERSION: v0.6.7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: helm lint
+        run: |
+          helm lint "$CHART" --strict
+          for f in "$CHART"/ci/*.yaml; do
+            helm lint "$CHART" --strict -f "$f"
+          done
+      - name: helm template
+        run: |
+          mkdir -p rendered
+          helm template ci "$CHART" --namespace waf > rendered/default.yaml
+          for f in "$CHART"/ci/*.yaml; do
+            helm template ci "$CHART" --namespace waf -f "$f" > "rendered/$(basename "$f")"
+          done
+      - name: kubeconform
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            rendered/*.yaml deploy/kubernetes/namespace.yaml deploy/kubernetes/hitechcloud-waf.yaml
+      - name: plain manifests up to date
+        run: deploy/kubernetes/render.sh --check

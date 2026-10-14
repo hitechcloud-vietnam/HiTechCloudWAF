@@ -1,0 +1,8 @@
+# Create the Secret first (docs/kubernetes.vi.md), then:
+#   kubectl apply -k deploy/kubernetes
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hitechcloud-waf
+resources:
+  - namespace.yaml
+  - hitechcloud-waf.yaml

@@ -1,0 +1,77 @@
+{{- if .Values.primary.enabled }}
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $p := .Values.primary -}}
+# Primary engine: the console administrators use. Its sites and certificates
+# are replicated to every WAF pod by the controller and the agent sidecars.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-primary
+  labels:
+    {{- include "hcw.componentLabels" (list . "primary") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list . "primary") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcw.selectorLabels" (list . "primary") | nindent 8 }}
+        {{- with $p.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "hcw.waf.config" . | sha256sum }}
+        {{- with $p.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "hcw.waf.podSpec" (dict "root" . "role" "primary") | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-primary
+  labels:
+    {{- include "hcw.componentLabels" (list . "primary") | nindent 4 }}
+    app.kubernetes.io/service: console
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "hcw.selectorLabels" (list . "primary") | nindent 4 }}
+  ports:
+    - name: console
+      port: {{ .Values.console.service.port }}
+      targetPort: console
+      protocol: TCP
+{{- if and $p.persistence.enabled (not $p.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-primary-data
+  labels:
+    {{- include "hcw.componentLabels" (list . "primary") | nindent 4 }}
+  {{- if or $p.persistence.keep $p.persistence.annotations }}
+  annotations:
+    {{- if $p.persistence.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with $p.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $p.persistence.accessModes | nindent 4 }}
+  {{- with $p.persistence.storageClass }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $p.persistence.size }}
+{{- end }}
+{{- end }}

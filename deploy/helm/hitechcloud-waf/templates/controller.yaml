@@ -1,0 +1,222 @@
+{{- if .Values.controller.enabled }}
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $c := .Values.controller -}}
+{{- $primaryURL := $c.primary.baseURL -}}
+{{- if not $primaryURL -}}
+{{- $primaryURL = printf "https://%s.%s.svc:%d" (include "hcw.consoleTarget" .) .Release.Namespace (int .Values.console.service.port) -}}
+{{- end -}}
+{{- $cfg := deepCopy (default dict $c.config) -}}
+{{- $_ := set $cfg "listen" (printf ":%d" (int $c.port)) -}}
+{{- $_ := set $cfg "tls_cert" "/etc/hcw/tls/tls.crt" -}}
+{{- $_ := set $cfg "tls_key" "/etc/hcw/tls/tls.key" -}}
+{{- $_ := set $cfg "state_file" "/var/lib/hcw/controller-state.json" -}}
+{{- $_ := set $cfg "admin_token_file" "/etc/hcw/secrets/admin.token" -}}
+{{- $_ := set $cfg "node_token_file" "/etc/hcw/secrets/node.token" -}}
+{{- $_ := set $cfg "dns_token_file" "/etc/hcw/secrets/dns.token" -}}
+{{- $_ := set $cfg "primary" (dict
+  "base_url" $primaryURL
+  "token_file" "/etc/hcw/secrets/primary-engine.token"
+  "token_header" "X-HCW-API-TOKEN"
+  "ca_file" "/etc/hcw/ca/ca.crt"
+  "resources" $c.primary.resources) -}}
+{{- $config := toYaml (dict "controller" $cfg) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-controller
+  labels:
+    {{- include "hcw.componentLabels" (list . "controller") | nindent 4 }}
+data:
+  controller.yaml: |
+    {{- $config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-controller
+  labels:
+    {{- include "hcw.componentLabels" (list . "controller") | nindent 4 }}
+spec:
+  # One controller: its state is a single file.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list . "controller") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcw.selectorLabels" (list . "controller") | nindent 8 }}
+      annotations:
+        checksum/config: {{ $config | sha256sum }}
+        {{- with $c.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "hcw.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $c.podSecurityContext | nindent 8 }}
+      containers:
+        - name: controller
+          image: {{ include "hcw.image" .Values.clusterImage }}
+          imagePullPolicy: {{ .Values.clusterImage.pullPolicy }}
+          args: [controller, -config, /etc/hcw/controller.yaml]
+          ports:
+            - name: api
+              containerPort: {{ $c.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet: {path: /healthz, port: api, scheme: HTTPS}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: api, scheme: HTTPS}
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: {path: /healthz, port: api, scheme: HTTPS}
+            periodSeconds: 10
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $c.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/hcw/controller.yaml
+              subPath: controller.yaml
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/hcw/secrets
+              readOnly: true
+            - name: tls
+              mountPath: /etc/hcw/tls
+              readOnly: true
+            - name: ca
+              mountPath: /etc/hcw/ca
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/hcw
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-controller
+        - name: secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: {{ include "hcw.clusterSecret" . }}
+                  items:
+                    - {key: admin-token, path: admin.token}
+                    - {key: node-token, path: node.token}
+                    - {key: dns-token, path: dns.token}
+              - secret:
+                  name: {{ include "hcw.authSecret" . }}
+                  items:
+                    - {key: api-token, path: primary-engine.token}
+        - name: tls
+          secret:
+            secretName: {{ default (printf "%s-controller-tls" $fullname) $c.tls.existingSecret }}
+            defaultMode: 0440
+            items:
+              - {key: tls.crt, path: tls.crt}
+              - {key: tls.key, path: tls.key}
+        - name: ca
+          secret:
+            secretName: {{ include "hcw.caSecret" . }}
+            defaultMode: 0444
+            items:
+              - {key: tls.crt, path: ca.crt}
+        - name: state
+          {{- if $c.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-controller" $fullname) $c.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-controller
+  labels:
+    {{- include "hcw.componentLabels" (list . "controller") | nindent 4 }}
+  {{- with $c.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $c.service.type }}
+  {{- if eq $c.service.type "LoadBalancer" }}
+  {{- with $c.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with $c.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- include "hcw.selectorLabels" (list . "controller") | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ $c.service.port }}
+      targetPort: api
+      protocol: TCP
+      {{- if and $c.service.nodePort (has $c.service.type (list "LoadBalancer" "NodePort")) }}
+      nodePort: {{ $c.service.nodePort }}
+      {{- end }}
+{{- if and $c.persistence.enabled (not $c.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-controller
+  labels:
+    {{- include "hcw.componentLabels" (list . "controller") | nindent 4 }}
+  {{- if or $c.persistence.keep $c.persistence.annotations }}
+  annotations:
+    {{- if $c.persistence.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with $c.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $c.persistence.accessModes | nindent 4 }}
+  {{- with $c.persistence.storageClass }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $c.persistence.size }}
+{{- end }}
+{{- end }}

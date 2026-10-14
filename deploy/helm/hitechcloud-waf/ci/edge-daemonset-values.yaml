@@ -1,0 +1,38 @@
+# Edge nodes: one WAF pod per labelled node in the node network, joining a
+# controller that runs elsewhere. Secrets are created beforehand:
+#   kubectl create secret generic hcw-auth --from-literal=api-token=... \
+#     --from-literal=challenge-key=... --from-literal=admin-password=...
+#   kubectl create secret generic hcw-node --from-literal=node-token=...
+#   kubectl create secret generic hcw-controller-ca --from-file=ca.crt
+auth:
+  existingSecret: hcw-auth
+  admin:
+    create: false
+
+waf:
+  kind: DaemonSet
+  hostNetwork: true
+  api:
+    allow: [10.0.0.0/8]
+  persistence:
+    enabled: true
+    hostPath: /var/lib/hcw-waf
+  nodeSelector:
+    hitechcloud.vn/waf-edge: "true"
+  tolerations:
+    - key: hitechcloud.vn/waf-edge
+      operator: Exists
+      effect: NoSchedule
+
+service:
+  type: ClusterIP
+
+agent:
+  enabled: true
+  controllerURL: https://ctl.waf.example.vn:7443
+  controllerCASecret: hcw-controller-ca
+  nodeTokenSecret: hcw-node
+  id: __NODE_NAME__
+  region: hcm
+  ipv4: __HOST_IP__
+  probeURL: http://__HOST_IP__:80/
