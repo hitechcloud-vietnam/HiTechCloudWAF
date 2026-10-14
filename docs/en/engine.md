@@ -35,6 +35,8 @@ file.
 | `paranoia` | 1–4. Default 1, few false positives. PL3–4 catch more but need tuning |
 | `anomaly_threshold` | CRS score threshold that blocks (default 5) |
 | `disabled_rules` | CRS rule IDs disabled for the site, for false positives |
+| `max_args` | Most arguments (query, form, JSON fields) inspected; more → 400. `0` (default) = 255, at most 10000 |
+| `static_fast_path` | `true`: requests for static files run only CRS phase 1 (default `false`, see "Inspection limits") |
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Lists of IPs or CIDRs |
 | `ports` | `"80"`, `"443_ssl"` (an `_ssl` port requires `cert_id`) |
@@ -108,9 +110,40 @@ a visitor to another node, the visitor does not have to solve the challenge
 again.
 
 Binary bodies (octet-stream, images, video, zip, pdf, gRPC) only have their
-headers inspected; their content is not scanned. For JSON/form bodies, the
+headers inspected; their content is not scanned. For multipart bodies, the
 engine inspects the first `body_limit_kb`; the rest is still passed in full to
-the upstream.
+the upstream. JSON, form and XML bodies larger than `body_args_limit_kb` are
+refused (see below).
+
+### Inspection limits
+
+The CRS costs CPU per argument and per byte inspected (at PL1 about 0.25 ms
+per query argument, 0.4 ms per JSON field and 6–8 µs per byte of values: a
+1 MB JSON body is ≈ 8 s of CPU). The engine therefore applies:
+
+| Limit | Default | Over the limit |
+|---|---|---|
+| Arguments per collection (query, body) – site `max_args` | 255 | 400, rule 100002 (query) / 100003 (body), before the CRS rules of that phase |
+| Query + body arguments (CRS `tx.max_num_args` = `max_args`) | 255 | CRS rule 920380, critical score |
+| JSON nesting depth | 64 | 400, rule 200002 |
+| Body parsed into arguments (all but multipart and binary) – node `body_args_limit_kb` | 128 KB, at most `body_limit_kb` | `block` sites: 413, event kind `body_limit`; `monitor` sites: only the first 128 KB is inspected and a `body_limit` monitor event is recorded |
+| CRS inspections running at once on the node – `waf_concurrency` | 2 × `GOMAXPROCS` | the request waits; 503 (`Retry-After: 5`) when the client leaves or after 10 s |
+
+Request bodies are read before an inspection slot is taken (slow uploads do
+not hold one; over 128 KB they are spooled to a temporary file), and the
+Coraza transaction is closed as soon as the verdict is known, before the
+request is proxied, so long responses (SSE, long polling) keep no WAF memory.
+
+**`static_fast_path`** (off by default): `GET`/`HEAD` requests with no query
+string, no body, a static extension (`.css .js .mjs .map .png .jpg .jpeg .gif
+.svg .webp .avif .ico .bmp .woff .woff2 .ttf .otf .eot`), no `;` and no
+script name in the path (`/index.php/app.css` is not static) run only CRS
+phase 1 (protocol, method, scanner and header checks) with early blocking
+(rule 949111), so scanners are still blocked. IP/country ACLs, path rules,
+threat intelligence, rate limits, auth and bot challenges always apply. The
+trade-off: cookies and arguments are inspected in phase 2, so an attack in a
+cookie sent with a static file request is not detected. Enable it only when
+static files are not served by application code.
 
 Tip: run in `monitor` for a few days to review the log, add `disabled_rules`
 for rules that cause false positives, then switch to `block`.

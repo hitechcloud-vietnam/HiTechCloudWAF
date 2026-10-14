@@ -144,7 +144,9 @@ Chi phí tuyến tính ~0,4 ms/khoá. Engine không đặt `tx.max_num_args`, c�
   **5 MB cho mỗi transaction đang mở**. Cấp phát ~3 MB/request, GC chiếm 4–6 % CPU.
   RSS 430–437 MB đến từ số transaction đang mở cùng lúc, không phải từ GC chậm.
 
-## Ba cơ hội tối ưu hàng đầu (chưa triển khai)
+## Ba cơ hội tối ưu hàng đầu
+
+Cả ba đã được triển khai, số đo xem [Sau tối ưu](#sau-tối-ưu-giới-hạn-kiểm-tra-đường-tắt-file-tĩnh-bộ-mã-hoá-dynamic).
 
 ### 1. Giới hạn chi phí kiểm tra mỗi request và số transaction Coraza chạy đồng thời
 
@@ -222,6 +224,78 @@ giảm từ ~0,9 ms xuống ~0,45–0,55 ms (−40–50 %), và req/s của kị
   nhân bộ nhớ (mới đo một biến thể).
 - `events.CountRequest` khoá một mutex toàn cục và gọi `time.Now()` ở mọi request. Ở mức
   ≤ 13 000 req/s đo được thì chưa thành vấn đề.
+
+## Sau tối ưu (giới hạn kiểm tra, đường tắt file tĩnh, bộ mã hoá dynamic)
+
+Thay đổi trong engine (chi tiết: [docs/engine.vi.md](../docs/engine.vi.md#giới-hạn-kiểm-tra)):
+
+- `SecArgumentsLimit` + CRS `tx.max_num_args` = 255 (site `max_args`); vượt quá trả 400
+  bằng rule 100002/100003 **trước** khi rule CRS nào của phase đó chạy. JSON sâu tối đa 64.
+- Body được phân tích thành tham số (JSON, form, XML) lớn hơn `body_args_limit_kb`
+  (mặc định 128 KB) trả 413 ở site `block`.
+- Tối đa `waf_concurrency` (mặc định 2 × `GOMAXPROCS`) lượt kiểm tra CRS chạy cùng lúc;
+  body được đọc trước khi chiếm lượt; transaction Coraza đóng ngay khi có kết quả,
+  trước khi proxy.
+- Tuỳ chọn site `static_fast_path` (mặc định tắt).
+- Dynamic protection: một buffer cấp đúng kích thước, bỏ `json.Marshal`, một lần đọc
+  `crypto/rand`, buffer đọc body lấy từ `sync.Pool`.
+
+### Đo lại
+
+Cùng máy ảo 4 vCPU nhưng **là một phiên máy khác** với bảng trên (sau khi khởi động lại,
+mọi kịch bản CRS chậm hơn ~15 %), nên chỉ so các lần chạy trong cùng phiên. Thứ tự chạy:
+sau (1) → trước → sau (2), mỗi kịch bản 20 s, 32 client. Bản "trước" là commit `9061297`.
+
+| # | Kịch bản | CPU µs/req trước | CPU µs/req sau (1 / 2) | RSS đỉnh MB trước → sau | req/s trước → sau |
+|---|---|---:|---:|---|---|
+| 2 | mode off | 141 | 145 / 143 | 26 → 28 | 11 360 → 10 963–11 159 |
+| 3 | PL1, GET có query | 3 767 | 4 202 / 4 215 | 92 → 81–82 | 513 → 469–472 |
+| 4 | PL1, POST JSON 2 KB (~100 trường) | 58 180 | 60 320 / 54 381 | **421 → 121–124** | 34 → 33–36 |
+| 4b | PL1, POST JSON 1 000 khoá (~28 KB) | **1 193 636** (200) | **1 167 / 1 153** (400) | **2 344 → 85** | 2 → 1 664–1 711 |
+| 6 | PL1, tấn công SQLi (403) | 3 129 | 3 290 / 3 310 | 81 → 81 | 631 → 598–603 |
+| 7 | PL1 + dynamic html, 50 KB | 3 401 | 2 964 / 2 606 | 99 → 83 | 577 → 622–755 |
+| 7a | PL1, 50 KB (đối chứng của 7) | 2 392 | 2 369 / 2 733 | 87 → 81 | 824 → 723–833 |
+| 9 | PL1, file tĩnh `.css` | 2 386 | 2 576 / 2 536 | 87 → 81 | 825 → 771–775 |
+| 9a | như 9 + `static_fast_path` | – | **647 / 637** | – → 80–81 | – → 3 043–3 067 |
+
+Đọc bảng:
+
+- **4b (DoS nhiều khoá)**: bản cũ tốn **1,19 giây CPU** và giữ 2,3 GB RSS cho mỗi request
+  28 KB. Bản mới dừng phân tích ở khoá thứ 256 và trả 400 trước khi CRS chạy:
+  **1,2 ms** (≈ 1 000 lần rẻ hơn), RSS 85 MB. Không còn khuếch đại tài nguyên theo số khoá.
+- **4 (RSS)**: chi phí CPU không đổi (request hợp lệ vẫn được kiểm tra đầy đủ), nhưng chỉ
+  4 transaction mở cùng lúc thay vì 32 và transaction đóng trước khi proxy, nên RSS đỉnh
+  giảm **71 %** (421 → 121 MB). Thông lượng không giảm vì CPU vẫn bão hoà (1,95–1,98 lõi).
+- **9a (file tĩnh)**: 2,4–2,6 ms → **0,64 ms CPU/request (−74 %)**, req/s ×3,9.
+- **7 (dynamic)**: phần chi phí thêm so với 7a giảm từ ~1,0 ms xuống ~0,0–0,6 ms (nhiễu của
+  hai kịch bản lớn hơn hiệu số). Số đo ổn định hơn từ benchmark Go trên 50 KB
+  (`BenchmarkApplyDynamicHTML50K`, `-cpu 1`): **382–407 µs, 631 KB, 70 lần cấp phát →
+  109–115 µs, 74 KB, 14 lần cấp phát** mỗi response. Kết quả khớp từng byte với bộ mã hoá
+  cũ (`TestDynamicEncoderMatchesPrevious`).
+- **3, 6, 7a, 9**: chênh lệch nằm trong mức nhiễu của máy dùng chung. Chạy xen kẽ
+  `-only 3,9 -d 12s` hai vòng: kịch bản 3 trước 4 477 / 4 168 µs, sau 4 155 / 4 023 µs;
+  kịch bản 9 trước 2 685 / 2 769 µs, sau 2 716 / 2 681 µs. Benchmark Go của riêng phần
+  `inspect` (cùng request kịch bản 3, cấu hình SecLang cũ và mới) cũng cho cùng mức
+  3,4–4,0 ms. Các giới hạn mới không làm request thường đắt hơn.
+
+### Phát hiện thêm: chi phí theo byte
+
+Giới hạn số khoá chưa đủ: CRS còn tốn CPU theo **độ dài giá trị**, khoảng 6–8 µs/byte ở
+PL1. Đo trên engine cũ (một request, máy rảnh): body JSON một trường 300 KB tốn 1,8 s,
+form một trường 128 KB tốn 1,0 s; body 1 MB (`body_limit_kb` mặc định) tốn ~8 s. Vì vậy
+engine thêm `body_args_limit_kb` (mặc định 128 KB, như `SecRequestBodyNoFilesLimit` của
+ModSecurity): body JSON/form/XML lớn hơn bị trả 413 ngay từ `Content-Length` (hoặc sau
+khi đọc 128 KB nếu gửi chunked), nên trường hợp xấu nhất mỗi request còn ~1 s CPU thay
+vì ~8 s, và với `waf_concurrency` số request như vậy chạy cùng lúc bị giới hạn. Body
+multipart chưa có giới hạn riêng (phần text của multipart vẫn tính theo `body_limit_kb`).
+
+### Tái lập phần sau tối ưu
+
+```sh
+cd waf && go build -o /tmp/hcwwaf ./cmd/hcw-waf && cd ../bench
+go run ./cmd/hcwbench -waf /tmp/hcwwaf -only 2,3,4,4b,6,7,7a,9,9a
+cd ../waf && go test ./internal/proxy -run XXX -bench ApplyDynamicHTML50K -benchtime 2000x -cpu 1
+```
 
 ## Tái lập
 

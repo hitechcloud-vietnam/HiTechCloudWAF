@@ -36,7 +36,13 @@ type Config struct {
 		Allow []string `yaml:"allow"`
 	} `yaml:"api"`
 
-	BodyLimitKB    int      `yaml:"body_limit_kb"`
+	BodyLimitKB int `yaml:"body_limit_kb"`
+	// BodyArgsLimitKB is the largest request body parsed into arguments
+	// (JSON, forms, XML) that sites in block mode accept (0 = 128).
+	BodyArgsLimitKB int `yaml:"body_args_limit_kb"`
+	// WAFConcurrency bounds the OWASP CRS inspections running at once on
+	// this node (0 = 2 × GOMAXPROCS); other requests wait for a slot.
+	WAFConcurrency int      `yaml:"waf_concurrency"`
 	CacheMB        int      `yaml:"cache_mb"` // response cache of all sites (0 = 256 MiB, -1 = off)
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	EventsKept     int      `yaml:"events_kept"`
@@ -106,6 +112,12 @@ func Load(path string) (*Config, error) {
 	}
 	if c.BodyLimitKB == 0 {
 		c.BodyLimitKB = 1024
+	}
+	if c.BodyArgsLimitKB < 0 {
+		return nil, fmt.Errorf("body_args_limit_kb must be >= 0")
+	}
+	if c.WAFConcurrency < 0 {
+		return nil, fmt.Errorf("waf_concurrency must be >= 0")
 	}
 	for _, p := range c.TrustedProxies {
 		n, err := model.ParseCIDR(p)

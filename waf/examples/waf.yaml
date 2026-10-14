@@ -11,6 +11,8 @@ api:
   # tls_cert / tls_key: leave empty to auto-generate a self-signed certificate
 
 body_limit_kb: 1024               # request body bytes inspected
+# body_args_limit_kb: 128         # largest JSON/form/XML body accepted by block-mode sites (413 above)
+# waf_concurrency: 0              # CRS inspections at once (0 = 2 × CPU cores); others wait, 503 after 10 s
 cache_mb: 256                     # memory for the response cache of all sites (-1 = off)
 trusted_proxies: []               # load balancers in front, e.g. [10.0.0.0/8]
 access_log:                       # one JSON line per request; remove to disable

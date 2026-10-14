@@ -3,13 +3,17 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -164,5 +168,124 @@ func TestProtectedJSRunsInNode(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(res)); got != "Xin chào thế giới!|42|function" {
 		t.Fatalf("protected script returned %q", got)
+	}
+}
+
+// refProtect is the previous encoder (one copy of the payload per step,
+// json.Marshal of the base64 text), kept to prove that the single-buffer
+// encoder produces the same bytes from the same randomness.
+func refProtect(src []byte, rnd io.Reader, html bool) []byte {
+	read := func(n int) []byte {
+		b := make([]byte, n)
+		if _, err := io.ReadFull(rnd, b); err != nil {
+			panic(err)
+		}
+		return b
+	}
+	ident := func() string {
+		const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		out := []byte{'_'}
+		for _, c := range read(9) {
+			out = append(out, letters[int(c)%len(letters)])
+		}
+		return string(out)
+	}
+	key := read(16)
+	enc := make([]byte, len(src))
+	for i, c := range src {
+		enc[i] = c ^ dynamicMask(key, i)
+	}
+	payload := base64.StdEncoding.EncodeToString(enc)
+	parts := make([]string, len(key))
+	for i, k := range key {
+		parts[i] = strconv.Itoa(int(k))
+	}
+	decoderJS := func() string {
+		p, _ := json.Marshal(payload)
+		d, k, u, i := ident(), ident(), ident(), ident()
+		return "(function(){var " + d + "=atob(" + string(p) + ")," + k + "=" + "[" + strings.Join(parts, ",") + "]" +
+			"," + u + "=new Uint8Array(" + d + ".length);for(var " + i + "=0;" + i + "<" + d + ".length;" + i + "++)" +
+			u + "[" + i + "]=" + d + ".charCodeAt(" + i + ")^" + k + "[" + i + "&15]^((" + i + ">>4)&255);" +
+			"return new TextDecoder(\"utf-8\").decode(" + u + ")})()"
+	}
+	if !html {
+		s := ident()
+		return []byte("(function(){var " + s + "=document.createElement(\"script\");" + s + ".text=" + decoderJS() +
+			";(document.head||document.documentElement).appendChild(" + s + ");" + s + ".parentNode.removeChild(" + s + ");})();")
+	}
+	fn := ident()
+	var b bytes.Buffer
+	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noarchive\"></head><body>")
+	b.WriteString("<noscript>Vui lòng bật JavaScript để xem trang này. / Please enable JavaScript.</noscript><script>")
+	b.WriteString("(function(){function " + fn + "(){var h=" + decoderJS() + ";document.open();document.write(h);document.close();}")
+	b.WriteString("function g(){setTimeout(" + fn + ",0)}")
+	b.WriteString("if(document.readyState===\"loading\"){document.addEventListener(\"DOMContentLoaded\",g)}else{g()}})();")
+	b.WriteString("</script></body></html>")
+	return b.Bytes()
+}
+
+func TestDynamicEncoderMatchesPrevious(t *testing.T) {
+	big := bytes.Repeat([]byte(pageHTML), 400) // ~100 KB: many chunks
+	for _, src := range [][]byte{nil, []byte("a"), []byte("ab"), []byte("abc"), []byte(pageHTML), big[:3<<10], big[:3<<10+1], big} {
+		for seed := range 3 {
+			rnd := make([]byte, dynRandLen)
+			for i := range rnd {
+				rnd[i] = byte(mrand.New(mrand.NewPCG(uint64(seed), uint64(len(src)+i))).Uint32())
+			}
+			if got, want := protectHTMLRand(src, rnd), refProtect(src, bytes.NewReader(rnd), true); !bytes.Equal(got, want) {
+				t.Fatalf("html, %d bytes: output differs from the previous encoder", len(src))
+			}
+			if got, want := protectJSRand(src, rnd), refProtect(src, bytes.NewReader(rnd), false); !bytes.Equal(got, want) {
+				t.Fatalf("js, %d bytes: output differs from the previous encoder", len(src))
+			}
+			if out := protectHTMLRand(src, rnd); cap(out) != dynamicBufLen(len(src)) {
+				t.Fatalf("html, %d bytes: output buffer grew", len(src))
+			}
+		}
+	}
+}
+
+func TestApplyDynamicBodySizes(t *testing.T) {
+	d := model.DynamicProtection{HTML: true}
+	for _, n := range []int{1, 32 << 10, 32<<10 + 1, 200 << 10} {
+		page := bytes.Repeat([]byte("x"), n)
+		for _, cl := range []int64{int64(n), -1} {
+			req, _ := http.NewRequest("GET", "http://x/", nil)
+			resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}}, Request: req,
+				ContentLength: cl, Body: io.NopCloser(bytes.NewReader(page))}
+			if err := applyDynamic(d, resp); err != nil {
+				t.Fatal(err)
+			}
+			out, _ := io.ReadAll(resp.Body)
+			if got := extract(t, string(out)); got != string(page) {
+				t.Fatalf("%d bytes (Content-Length %d): payload decodes to %d bytes", n, cl, len(got))
+			}
+		}
+	}
+	// Above the limit the body passes through untouched.
+	page := bytes.Repeat([]byte("y"), maxDynamicBody+10)
+	req, _ := http.NewRequest("GET", "http://x/", nil)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}}, Request: req,
+		ContentLength: -1, Body: io.NopCloser(bytes.NewReader(page))}
+	if err := applyDynamic(d, resp); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := io.ReadAll(resp.Body); !bytes.Equal(out, page) || resp.Header.Get("X-HCW-Protected") != "" {
+		t.Fatal("large page altered")
+	}
+}
+
+func BenchmarkApplyDynamicHTML50K(b *testing.B) {
+	page := bytes.Repeat([]byte(pageHTML), 50<<10/len(pageHTML))
+	d := model.DynamicProtection{HTML: true}
+	req, _ := http.NewRequest("GET", "http://x/", nil)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(page)))
+	for b.Loop() {
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}}, Request: req,
+			ContentLength: int64(len(page)), Body: io.NopCloser(bytes.NewReader(page))}
+		if err := applyDynamic(d, resp); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

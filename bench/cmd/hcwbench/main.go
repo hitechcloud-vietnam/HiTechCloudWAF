@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -258,7 +259,7 @@ func runScenario(ctx context.Context, c *config, tmp string, up *upstream, sc sc
 	lr := runLoad(ctx, loadSpec{
 		target: target, clients: c.clients, warmup: c.warmup, measure: c.measure,
 		next:   func(n uint64) request { return sc.Next(n, hosts) },
-		expect: sc.Expect,
+		expect: append([]int{sc.Expect}, sc.AlsoOK...),
 		onWindow: func(start bool) {
 			now := time.Now()
 			var ps procSample
@@ -311,8 +312,11 @@ func sanity(target string, sc scenario, hosts []string, r *result) error {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != sc.Expect {
+	if resp.StatusCode != sc.Expect && !slices.Contains(sc.AlsoOK, resp.StatusCode) {
 		return fmt.Errorf("sanity request: status %d, expected %d", resp.StatusCode, sc.Expect)
+	}
+	if resp.StatusCode != sc.Expect {
+		r.Note = fmt.Sprintf("trả %d", resp.StatusCode)
 	}
 	if sc.CheckDynamic {
 		if resp.Header.Get("X-HCW-Protected") != "html" {
