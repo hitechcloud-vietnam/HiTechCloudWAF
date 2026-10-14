@@ -24,4 +24,5 @@ mô tả dưới.
 
 ## Hoàn thành khi
 `cd waf && go test -race ./...` xanh, `HCW_E2E=1 go test ./...` trong `e2e/`
-xanh, RESULTS.md có số liệu trước/sau, CHANGELOG ghi lại.
+xanh, RESULTS.md có số liệu trước/sau, CHANGELOG ghi lại (mục *Chưa phát hành*),
+phát hành bản tiếp theo (v0.7.0) theo quy trình ở `plan/06` / mục *Phát hành* của PLAN.md.

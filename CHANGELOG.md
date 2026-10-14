@@ -1,6 +1,6 @@
 # Changelog
 
-## Chưa phát hành
+## v0.6.0 – 2026-10-14
 
 ### Engine (`hcw-waf`)
 - **Trang Sự kiện**: lọc theo ứng dụng, loại, hành động, IP/CIDR, nội dung,

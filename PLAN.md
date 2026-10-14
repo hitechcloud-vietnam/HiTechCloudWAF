@@ -1,7 +1,7 @@
 # Kế hoạch phát triển HiTechCloud WAF
 
 Cập nhật: 2026-10-14. Nhánh chính: **`main`** (mọi thay đổi merge vào đây; CI
-phải xanh). Phiên bản phát hành mới nhất: **v0.5.0**.
+phải xanh). Phiên bản phát hành mới nhất: **v0.6.0**.
 
 Mỗi việc chưa xong có một file riêng trong [`plan/`](plan/) mô tả bối cảnh,
 file code liên quan, các bước và tiêu chí hoàn thành. Dev nhận việc: ghi tên
@@ -15,7 +15,6 @@ CI xanh, rồi chuyển việc sang mục *Đã xong* bên dưới (và xoá fil
 |---|---|---|---|
 | [01](plan/01-default-branch-main.md) | Đặt `main` làm nhánh mặc định trên GitHub | cao | cần quyền admin repo |
 | [02](plan/02-engine-performance.md) | Tối ưu hiệu năng engine (giới hạn tham số, semaphore, đóng transaction sớm, fast path tĩnh, mã hoá dynamic) | cao | đang làm dở |
-| [05](plan/05-release-v0.6.0.md) | Phát hành v0.6.0 | cao | sau khi CI xanh |
 | [03](plan/03-helm-enrollment.md) | Helm chart + bootstrap Docker hỗ trợ enrollment token | trung bình | |
 | [04](plan/04-e2e-enrollment.md) | Bộ e2e dùng enrollment token | trung bình | |
 | [09](plan/09-engine-followups.md) | Engine: health check `last_error`, gộp request cache, timeout listener… | trung bình | 7 mục |
@@ -42,9 +41,17 @@ CI xanh, rồi chuyển việc sang mục *Đã xong* bên dưới (và xoá fil
   OpenAPI + test chống lệch, bộ benchmark, bộ e2e, installer 1 lệnh có kiểm
   tra SHA256.
 - Bảo mật: đợt rà soát code (3 lỗi Cao, 5 Trung bình, 8 Thấp) đã sửa kèm test.
-- Phát hành v0.1.0 → v0.5.0; CI: test + race, govulncheck, helm, e2e, image GHCR.
+- Phát hành v0.1.0 → v0.6.0; CI: test + race, govulncheck, helm, e2e, image GHCR.
 - Tài liệu: [docs/deploy.vi.md](docs/deploy.vi.md) (triển khai chi tiết),
   engine, cluster, Kubernetes, API, tiếng Anh.
+
+## Phát hành
+
+1. Đổi tiêu đề *Chưa phát hành* trong `CHANGELOG.md` thành `vX.Y.Z – <ngày>`,
+   merge vào `main`, đợi CI xanh.
+2. Actions → **Release** → *Run workflow* trên `main`, `version = vX.Y.Z`.
+3. Kiểm tra release có `hcw-waf`, `hcw` (linux amd64/arm64), `hcwctl`
+   (linux/darwin/windows), `install.sh`, `SHA256SUMS`.
 
 ## Quy ước cho dev
 
