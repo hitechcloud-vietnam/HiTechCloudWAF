@@ -36,7 +36,8 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
   Prometheus.
 - Trang chặn whitelabel kèm Event ID.
 - Console web quản trị whitelabel: dashboard, ứng dụng, sự kiện (chặn IP hoặc
-  báo chặn nhầm chỉ với 1 click), chứng chỉ.
+  báo chặn nhầm chỉ với 1 click), chứng chỉ; nhiều tài khoản với vai trò
+  admin/viewer và xác thực 2 lớp (TOTP).
 - Log sự kiện tấn công và API quản trị.
 
 ![Console](docs/images/console-dashboard.png)

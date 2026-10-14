@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.0 – 2026-10-14
+
+### Engine (`hcw-waf`)
+- **Tài khoản console nhiều người dùng**: vai trò `admin`/`viewer`, mật khẩu
+  bcrypt, phiên 12 giờ, khoá IP khi đăng nhập sai nhiều lần.
+- **Xác thực 2 lớp TOTP** (Google/Microsoft Authenticator, Authy), bật bằng
+  mã QR ngay trên console, chống dùng lại mã; admin có thể reset 2FA cho
+  người khác.
+- **Rule theo đường dẫn**: `allow` (whitelist), `deny`, `skip_waf`,
+  `rate_limit` (ví dụ giới hạn `POST /login`), có điều kiện theo method và IP;
+  có trình soạn rule trên console.
+- **Cảnh báo Telegram và webhook** (ký HMAC), gom nhóm theo site và loại tấn
+  công; có nút gửi thử.
+
 ## v0.2.0 – 2026-10-14
 
 ### Engine (`hcw-waf`)

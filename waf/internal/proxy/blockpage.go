@@ -12,6 +12,9 @@ type Brand struct {
 	SupportURL string `yaml:"support_url" json:"support_url"`
 }
 
+// BrandName is used for TOTP issuer names.
+func (b Brand) BrandName() string { return b.Name }
+
 var blockTmpl = template.Must(template.New("block").Parse(`<!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}} – {{.Brand.Name}}</title>

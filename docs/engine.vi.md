@@ -211,7 +211,30 @@ scrape_configs:
 ## Console web quản trị
 
 Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
-(`https://127.0.0.1:9443/`). Đăng nhập bằng API token. Chức năng:
+(`https://127.0.0.1:9443/`). Có hai cách đăng nhập:
+
+- **Tài khoản người dùng** (khuyên dùng). Lần đầu, đăng nhập bằng API token,
+  vào trang **Người dùng** để tạo tài khoản quản trị. Có hai vai trò:
+  `admin` (toàn quyền) và `viewer` (chỉ xem; máy chủ từ chối mọi thao tác
+  sửa đổi, giao diện ẩn các nút tương ứng).
+- **API token**: quyền admin, dành cho tự động hoá và cluster agent.
+
+**Bảo mật tài khoản:**
+
+- Mật khẩu ≥ 10 ký tự, lưu dạng bcrypt.
+- Phiên đăng nhập hết hạn sau 12 giờ. Đổi mật khẩu, đổi quyền hoặc xoá tài
+  khoản thì các phiên đang mở của người đó bị huỷ.
+- Sai 10 lần trong 15 phút thì địa chỉ IP bị khoá tạm thời.
+- **Xác thực 2 lớp (TOTP):** vào **Tài khoản**, quét mã QR bằng Google/
+  Microsoft Authenticator hoặc Authy, rồi nhập mã để xác nhận. Từ đó mỗi lần
+  đăng nhập cần thêm mã 6 số; mỗi mã chỉ dùng được một lần.
+- Mất điện thoại: một admin khác bấm **Reset 2FA** cho người đó.
+- Tài khoản lưu ở `data_dir/users.json`. Không thể xoá hoặc hạ quyền admin
+  cuối cùng.
+
+![Bật 2FA](images/console-2fa.png)
+
+Chức năng:
 
 - **Tổng quan:** số request và số lần chặn trong 60 phút, biểu đồ theo phút,
   các loại tấn công gần đây, thống kê theo từng ứng dụng.
@@ -251,6 +274,12 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | GET | `/api/open/timeseries` | – (60 phút gần nhất) |
 | GET | `/api/open/info` | – (version, số site) |
 | GET | `/api/open/brand` | – (không cần token) |
+| POST | `/api/auth/login` | `{"username","password","otp"}` → `token` (gửi qua header `X-HCW-Session`) |
+| POST | `/api/auth/logout` | – |
+| GET | `/api/open/me` | – |
+| POST | `/api/open/me/password`, `/me/totp/setup`, `/me/totp/enable`, `/me/totp/disable` | – |
+| GET / POST / PUT / DELETE | `/api/open/users` | quản lý người dùng (admin) |
+| POST | `/api/open/alerts/test` | – |
 
 Ví dụ:
 

@@ -37,6 +37,7 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/mgmt"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/users"
 )
 
 var version = "dev"
@@ -151,6 +152,9 @@ func run(path string, log *slog.Logger) error {
 		Brand: cfg.Brand, Version: version, Started: start, Console: console.Handler(), Allow: cfg.APIAllow}
 	if alertSender != nil {
 		api.Alerts = alertSender
+	}
+	if api.Users, err = users.Open(filepath.Join(cfg.DataDir, "users.json")); err != nil {
+		return fmt.Errorf("users: %w", err)
 	}
 	crt, key := cfg.API.TLSCert, cfg.API.TLSKey
 	if crt == "" {

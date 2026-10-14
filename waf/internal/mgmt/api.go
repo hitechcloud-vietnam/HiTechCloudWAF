@@ -22,6 +22,7 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/users"
 )
 
 // TokenHeader carries the API token (Authorization: Bearer also works).
@@ -40,6 +41,9 @@ type API struct {
 	Console http.Handler
 	// Allow restricts the API and console to these networks (empty = any).
 	Allow []*net.IPNet
+	// Users enables console accounts; nil means API token only.
+	Users *users.Store
+	guard loginGuard
 	// Alerts sends notifications; nil when no channel is configured.
 	Alerts interface {
 		SendTest(context.Context) error
@@ -177,6 +181,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/open/info", func(w http.ResponseWriter, _ *http.Request) {
 		ok(w, map[string]any{"version": a.Version, "started_at": a.Started, "sites": len(a.Store.Sites()), "certs": len(a.Store.Certs())})
 	})
+	a.registerAccountRoutes(mux)
 	if a.Console != nil {
 		mux.Handle("GET /", a.Console)
 	}
@@ -188,12 +193,22 @@ func (a *API) Handler() http.Handler {
 			fail(w, http.StatusForbidden, "forbidden", errors.New("management access is not allowed from this address"))
 			return
 		}
-		public := r.URL.Path == "/api/open/health" || r.URL.Path == "/api/open/brand" || !strings.HasPrefix(r.URL.Path, "/api/")
-		if !public && !a.authorized(r) {
-			fail(w, http.StatusUnauthorized, "unauthorized", errors.New("missing or invalid API token"))
+		public := r.URL.Path == "/api/open/health" || r.URL.Path == "/api/open/brand" ||
+			(r.URL.Path == "/api/auth/login" && r.Method == http.MethodPost) || !strings.HasPrefix(r.URL.Path, "/api/")
+		if public {
+			mux.ServeHTTP(w, r)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		p, authed := a.authenticate(r)
+		if !authed {
+			fail(w, http.StatusUnauthorized, "unauthorized", errors.New("missing or invalid API token or session"))
+			return
+		}
+		if !p.admin() && !viewerAllowed(r) {
+			fail(w, http.StatusForbidden, "forbidden", errors.New("your role is read-only"))
+			return
+		}
+		mux.ServeHTTP(w, withCaller(r, p))
 	})
 }
 

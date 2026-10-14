@@ -76,3 +76,9 @@ legend { font-weight: 700; padding: 0 6px; }
 .legend i.lg-blk { background: var(--bad); }
 .main > .spacer, .card > .spacer, div.spacer:not(.row > .spacer) { height: 12px; }
 td.nowrap { white-space: nowrap; word-break: normal; }
+
+.login-card input { margin: 6px 0; }
+.login-card button { margin-top: 8px; }
+.small-link { display: inline-block; margin-top: 6px; font-size: 13px; }
+body.viewer .admin-only { display: none !important; }
+.qr { width: 200px; height: 200px; image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 8px; }

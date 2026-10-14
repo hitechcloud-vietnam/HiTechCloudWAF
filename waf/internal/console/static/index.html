@@ -12,10 +12,18 @@
   <form id="login-form" class="card login-card">
     <img src="/logo.svg" alt="" class="login-logo">
     <h1 class="brand-name">HiTechCloud WAF</h1>
-    <p class="muted">Nhập API token của node để quản trị.</p>
-    <input id="token" type="password" placeholder="API token" autocomplete="current-password" required>
+    <div id="login-user">
+      <input id="username" placeholder="Tên đăng nhập" autocomplete="username">
+      <input id="password" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+      <input id="otp" inputmode="numeric" maxlength="6" placeholder="Mã xác thực 2 lớp (6 số)" autocomplete="one-time-code" hidden>
+    </div>
+    <div id="login-token" hidden>
+      <p class="muted">Nhập API token của node.</p>
+      <input id="token" type="password" placeholder="API token" autocomplete="off">
+    </div>
     <button type="submit" class="btn primary block">Đăng nhập</button>
     <p id="login-err" class="err"></p>
+    <a href="#" id="login-mode" class="small-link">Dùng API token</a>
   </form>
 </div>
 
@@ -27,8 +35,11 @@
       <a href="#/sites" data-nav="sites">Ứng dụng</a>
       <a href="#/events" data-nav="events">Sự kiện tấn công</a>
       <a href="#/certs" data-nav="certs">Chứng chỉ</a>
+      <a href="#/users" data-nav="users" class="admin-only">Người dùng</a>
+      <a href="#/account" data-nav="account">Tài khoản</a>
     </nav>
     <div class="side-foot">
+      <span id="who" class="muted"></span>
       <span id="ver" class="muted"></span>
       <button id="logout" class="btn ghost small">Đăng xuất</button>
     </div>

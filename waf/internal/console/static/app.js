@@ -1,13 +1,18 @@
 /* HiTechCloud WAF console. All dynamic text is inserted with textContent. */
 (function () {
   "use strict";
-  var KEY = "hcw-waf-token";
-  var state = { sites: [], certs: [] };
+  var KEY = "hcw-waf-token", SKEY = "hcw-waf-session";
+  var state = { sites: [], certs: [], me: null };
 
   // ---------- helpers ----------
   function $(id) { return document.getElementById(id); }
-  function token() { try { return sessionStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
-  function setToken(t) { try { if (t) sessionStorage.setItem(KEY, t); else sessionStorage.removeItem(KEY); } catch (e) {} }
+  function stored(k) { try { return sessionStorage.getItem(k) || ""; } catch (e) { return ""; } }
+  function store(k, v) { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) {} }
+  function token() { return stored(KEY); }
+  function session() { return stored(SKEY); }
+  function setToken(t) { store(KEY, t); }
+  function signedIn() { return !!(token() || session()); }
+  function signOut() { store(KEY, ""); store(SKEY, ""); state.me = null; }
 
   function el(tag, attrs, children) {
     var n = document.createElement(tag);
@@ -37,11 +42,11 @@
   function api(method, path, body) {
     return fetch(path, {
       method: method,
-      headers: { "X-HCW-API-TOKEN": token(), "Content-Type": "application/json" },
+      headers: session() ? { "X-HCW-Session": session(), "Content-Type": "application/json" } : { "X-HCW-API-TOKEN": token(), "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body)
     }).then(function (r) {
       return r.json().catch(function () { return { err: "http_" + r.status, msg: r.statusText }; }).then(function (j) {
-        if (r.status === 401) { setToken(""); show(); }
+        if (r.status === 401 && path !== "/api/auth/login") { signOut(); show(); }
         if (!r.ok || j.err) throw new Error(j.msg || j.err || ("HTTP " + r.status));
         return j.data;
       });
@@ -50,17 +55,43 @@
 
   // ---------- shell ----------
   function show() {
-    var authed = !!token();
+    var authed = signedIn();
     $("login").hidden = authed; $("app").hidden = !authed;
-    if (authed) route();
+    if (!authed) return;
+    api("GET", "/api/open/me").then(function (me) {
+      state.me = me;
+      document.body.classList.toggle("viewer", me.role !== "admin");
+      $("who").textContent = me.account ? me.username + " (" + (me.role === "admin" ? "quản trị" : "chỉ xem") + ")" : "API token";
+      route();
+    }).catch(function () {});
   }
+  var tokenMode = false;
+  $("login-mode").addEventListener("click", function (e) {
+    e.preventDefault(); tokenMode = !tokenMode;
+    $("login-user").hidden = tokenMode; $("login-token").hidden = !tokenMode;
+    $("login-mode").textContent = tokenMode ? "Đăng nhập bằng tài khoản" : "Dùng API token";
+  });
   $("login-form").addEventListener("submit", function (e) {
     e.preventDefault();
-    setToken($("token").value.trim());
-    api("GET", "/api/open/info").then(function () { $("token").value = ""; $("login-err").textContent = ""; show(); })
-      .catch(function (err) { setToken(""); $("login-err").textContent = "Token không hợp lệ: " + err.message; });
+    $("login-err").textContent = "";
+    if (tokenMode) {
+      setToken($("token").value.trim());
+      api("GET", "/api/open/info").then(function () { $("token").value = ""; show(); })
+        .catch(function (err) { signOut(); $("login-err").textContent = "Token không hợp lệ: " + err.message; });
+      return;
+    }
+    fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("username").value.trim(), password: $("password").value, otp: $("otp").value.trim() }) })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (j.err === "otp_required") { $("otp").hidden = false; $("otp").focus(); $("login-err").textContent = "Nhập mã từ ứng dụng xác thực."; return; }
+        if (j.err) { $("login-err").textContent = j.msg || j.err; return; }
+        store(SKEY, j.data.token); $("password").value = ""; $("otp").value = ""; $("otp").hidden = true; show();
+      }).catch(function (err) { $("login-err").textContent = err.message; });
   });
-  $("logout").addEventListener("click", function () { setToken(""); show(); });
+  $("logout").addEventListener("click", function () {
+    var done = function () { signOut(); show(); };
+    if (session()) api("POST", "/api/auth/logout").then(done, done); else done();
+  });
 
   fetch("/api/open/brand").then(function (r) { return r.json(); }).then(function (j) {
     var b = j.data || {};
@@ -78,10 +109,10 @@
       a.classList.toggle("active", a.getAttribute("data-nav") === parts[0]);
     });
     var v = clear($("view"));
-    var views = { dashboard: dashboard, sites: sites, events: eventsView, certs: certs };
+    var views = { dashboard: dashboard, sites: sites, events: eventsView, certs: certs, users: usersView, account: accountView };
     (views[parts[0]] || dashboard)(v, parts.slice(1));
   }
-  window.addEventListener("hashchange", function () { if (token()) route(); });
+  window.addEventListener("hashchange", function () { if (signedIn()) route(); });
 
   function loadAll() {
     return Promise.all([api("GET", "/api/open/site"), api("GET", "/api/open/cert")]).then(function (r) {
@@ -96,7 +127,7 @@
   // ---------- dashboard ----------
   function dashboard(v) {
     v.appendChild(el("div", { class: "row" }, [el("h1", { text: "Tổng quan" }), el("span", { class: "spacer" }),
-      el("button", { class: "btn", text: "Gửi thử cảnh báo", onclick: function () {
+      el("button", { class: "btn admin-only", text: "Gửi thử cảnh báo", onclick: function () {
         api("POST", "/api/open/alerts/test").then(function () { toast("Đã gửi tin nhắn thử tới Telegram/webhook"); }).catch(function (e) { toast(e.message, true); });
       } })]));
     var cards = el("div", { class: "cards" });
@@ -169,7 +200,7 @@
         return s ? siteForm(v, s) : (v.appendChild(el("p", { text: "Không tìm thấy ứng dụng." })));
       }
       v.appendChild(el("div", { class: "row" }, [el("h1", { text: "Ứng dụng được bảo vệ" }), el("span", { class: "spacer" }),
-        el("a", { class: "btn primary", href: "#/sites/new", text: "+ Thêm ứng dụng" })]));
+        el("a", { class: "btn primary admin-only", href: "#/sites/new", text: "+ Thêm ứng dụng" })]));
       var tb = el("tbody");
       state.sites.forEach(function (s) {
         var feats = [];
@@ -249,8 +280,8 @@
       el("fieldset", {}, [el("legend", { text: "Proxy nâng cao" }), el("div", { class: "grid2" }, [
         field("Host gửi lên upstream", el("input", { id: "f-uh", value: s.upstream_host || "" }), "Để trống = giữ Host của khách."),
         el("div", {}, [check("Chuyển hướng HTTP → HTTPS", "f-redir", s.redirect_https), check("Bỏ qua kiểm tra chứng chỉ upstream", "f-uins", s.upstream_insecure)])])]),
-      el("div", { class: "row" }, [el("button", { type: "submit", class: "btn primary", text: isNew ? "Tạo ứng dụng" : "Lưu thay đổi" }),
-        isNew ? null : el("button", { type: "button", class: "btn danger", text: "Xoá ứng dụng", onclick: function () {
+      el("div", { class: "row" }, [el("button", { type: "submit", class: "btn primary admin-only", text: isNew ? "Tạo ứng dụng" : "Lưu thay đổi" }),
+        isNew ? null : el("button", { type: "button", class: "btn danger admin-only", text: "Xoá ứng dụng", onclick: function () {
           if (!confirm("Xoá ứng dụng " + s.name + "?")) return;
           api("DELETE", "/api/open/site", { ids: [s.id] }).then(function () { toast("Đã xoá"); location.hash = "#/sites"; }).catch(function (e) { toast(e.message, true); });
         } })])
@@ -360,12 +391,12 @@
     });
     var actions = el("div", { class: "row" });
     if (site) {
-      actions.appendChild(el("button", { class: "btn danger small", text: "Chặn IP " + e.client_ip, onclick: function () {
+      actions.appendChild(el("button", { class: "btn danger small admin-only", text: "Chặn IP " + e.client_ip, onclick: function () {
         var s = JSON.parse(JSON.stringify(site)); s.ip_deny = (s.ip_deny || []).concat([e.client_ip]);
         api("PUT", "/api/open/site", s).then(function () { toast("Đã thêm " + e.client_ip + " vào denylist của " + site.name); loadAll(); }).catch(function (x) { toast(x.message, true); });
       } }));
       var fp = (e.rules || []).map(function (r) { return r.id; }).filter(function (id) { return id < 949000; });
-      if (fp.length) actions.appendChild(el("button", { class: "btn small", text: "Báo chặn nhầm (tắt " + fp.length + " rule)", onclick: function () {
+      if (fp.length) actions.appendChild(el("button", { class: "btn small admin-only", text: "Báo chặn nhầm (tắt " + fp.length + " rule)", onclick: function () {
         if (!confirm("Tắt các rule " + fp.join(", ") + " cho " + site.name + "?")) return;
         var s = JSON.parse(JSON.stringify(site)); s.disabled_rules = Array.from(new Set((s.disabled_rules || []).concat(fp)));
         api("PUT", "/api/open/site", s).then(function () { toast("Đã tắt rule cho " + site.name); loadAll(); }).catch(function (x) { toast(x.message, true); });
@@ -392,7 +423,7 @@
         var rd = new FileReader(); rd.onload = function () { $(target).value = rd.result; }; rd.readAsText(f);
       } });
     }
-    var form = el("form", {}, [el("fieldset", {}, [el("legend", { text: "Thêm chứng chỉ" }), el("div", { class: "grid2" }, [
+    var form = el("form", { class: "admin-only" }, [el("fieldset", {}, [el("legend", { text: "Thêm chứng chỉ" }), el("div", { class: "grid2" }, [
       field("Certificate (PEM, kèm chain)", el("textarea", { id: "c-crt" })), field("Private key (PEM)", el("textarea", { id: "c-key" }))]),
       el("div", { class: "row" }, [readFile("c-crt"), readFile("c-key")]), el("div", { class: "spacer" }),
       el("button", { type: "submit", class: "btn primary", text: "Tải lên" })])]);
@@ -409,7 +440,7 @@
           el("td", { class: "mono", text: c.domains.join(", ") }), el("td", { text: c.issuer || "" }),
           el("td", {}, [el("span", { class: "pill " + (days < 0 ? "bad" : days < 30 ? "warn" : "ok"), text: days < 0 ? "Đã hết hạn" : "Còn " + days + " ngày" })]),
           el("td", { text: used.join(", ") || "–" }),
-          el("td", {}, [el("button", { class: "btn danger small", text: "Xoá", onclick: function () {
+          el("td", {}, [el("button", { class: "btn danger small admin-only", text: "Xoá", onclick: function () {
             if (!confirm("Xoá chứng chỉ " + c.domains.join(", ") + "?")) return;
             api("DELETE", "/api/open/cert", { ids: [c.id] }).then(function () { toast("Đã xoá"); route(); }).catch(function (x) { toast(x.message, true); });
           } })])]));
@@ -418,6 +449,100 @@
       list.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Tên miền", "Cấp bởi", "Hiệu lực", "Dùng cho", ""].map(function (h) { return el("th", { text: h }); }))]), tb])]));
       list.appendChild(form);
     }).catch(function (e) { toast(e.message, true); });
+  }
+
+  // ---------- users (admins) ----------
+  function usersView(v) {
+    v.appendChild(el("h1", { text: "Người dùng console" }));
+    var list = el("div"); v.appendChild(list);
+    var roleLabel = function (r) { return r === "admin" ? "Quản trị" : "Chỉ xem"; };
+    function load() {
+      api("GET", "/api/open/users").then(function (d) {
+        clear(list);
+        var tb = el("tbody");
+        (d.data || []).forEach(function (u) {
+          var roleSel = select("", [["admin", "Quản trị"], ["viewer", "Chỉ xem"]], u.role); roleSel.removeAttribute("id");
+          roleSel.addEventListener("change", function () {
+            api("PUT", "/api/open/users", { username: u.username, role: roleSel.value }).then(function () { toast("Đã đổi quyền " + u.username); load(); }, function (x) { toast(x.message, true); load(); });
+          });
+          tb.appendChild(el("tr", {}, [
+            el("td", {}, [el("b", { text: u.username })]), el("td", {}, [roleSel]),
+            el("td", {}, [el("span", { class: "pill " + (u.totp ? "ok" : "warn"), text: u.totp ? "Đã bật" : "Chưa bật" })]),
+            el("td", { text: u.last_login ? fmtTime(u.last_login) : "–" }),
+            el("td", {}, [
+              u.totp ? el("button", { class: "btn small", text: "Reset 2FA", onclick: function () {
+                if (confirm("Tắt xác thực 2 lớp của " + u.username + "?")) api("PUT", "/api/open/users", { username: u.username, reset_totp: true }).then(function () { toast("Đã reset 2FA"); load(); }, function (x) { toast(x.message, true); });
+              } }) : null, " ",
+              el("button", { class: "btn small", text: "Đặt mật khẩu", onclick: function () {
+                var p = prompt("Mật khẩu mới cho " + u.username + " (≥ 10 ký tự):"); if (!p) return;
+                api("PUT", "/api/open/users", { username: u.username, password: p }).then(function () { toast("Đã đổi mật khẩu"); }, function (x) { toast(x.message, true); });
+              } }), " ",
+              el("button", { class: "btn danger small", text: "Xoá", onclick: function () {
+                if (confirm("Xoá người dùng " + u.username + "?")) api("DELETE", "/api/open/users", { usernames: [u.username] }).then(function () { toast("Đã xoá"); load(); }, function (x) { toast(x.message, true); });
+              } })])]));
+        });
+        if (!(d.data || []).length) tb.appendChild(el("tr", {}, [el("td", { colspan: "5", class: "muted", text: "Chưa có tài khoản; đang dùng API token. Hãy tạo tài khoản quản trị đầu tiên." })]));
+        list.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Tên đăng nhập", "Quyền", "Xác thực 2 lớp", "Đăng nhập gần nhất", ""].map(function (h) { return el("th", { text: h }); }))]), tb])]));
+        var f = el("form", {}, [el("fieldset", {}, [el("legend", { text: "Thêm người dùng" }), el("div", { class: "grid2" }, [
+          field("Tên đăng nhập", el("input", { id: "u-name", autocomplete: "off" })),
+          field("Mật khẩu", el("input", { id: "u-pass", type: "password", autocomplete: "new-password" }), "Tối thiểu 10 ký tự."),
+          field("Quyền", select("u-role", [["viewer", "Chỉ xem"], ["admin", "Quản trị"]], "viewer"))]),
+          el("div", { class: "spacer" }), el("button", { type: "submit", class: "btn primary", text: "Tạo" })])]);
+        f.addEventListener("submit", function (e) {
+          e.preventDefault();
+          api("POST", "/api/open/users", { username: $("u-name").value.trim(), password: $("u-pass").value, role: $("u-role").value })
+            .then(function () { toast("Đã tạo người dùng"); load(); }, function (x) { toast(x.message, true); });
+        });
+        list.appendChild(f);
+      }).catch(function (e) { toast(e.message, true); });
+    }
+    load();
+  }
+
+  // ---------- my account ----------
+  function accountView(v) {
+    v.appendChild(el("h1", { text: "Tài khoản của tôi" }));
+    var me = state.me || {};
+    if (!me.account) {
+      v.appendChild(el("p", { class: "muted", text: "Bạn đang đăng nhập bằng API token. Tạo tài khoản ở trang Người dùng rồi đăng nhập bằng tài khoản để dùng mật khẩu và xác thực 2 lớp." }));
+      return;
+    }
+    var pw = el("form", {}, [el("fieldset", {}, [el("legend", { text: "Đổi mật khẩu" }), el("div", { class: "grid2" }, [
+      field("Mật khẩu hiện tại", el("input", { id: "a-cur", type: "password", autocomplete: "current-password" })),
+      field("Mật khẩu mới", el("input", { id: "a-new", type: "password", autocomplete: "new-password" }), "Tối thiểu 10 ký tự.")]),
+      el("div", { class: "spacer" }), el("button", { type: "submit", class: "btn primary", text: "Đổi mật khẩu" })])]);
+    pw.addEventListener("submit", function (e) {
+      e.preventDefault();
+      api("POST", "/api/open/me/password", { current: $("a-cur").value, new: $("a-new").value }).then(function () { toast("Đã đổi mật khẩu"); $("a-cur").value = $("a-new").value = ""; }, function (x) { toast(x.message, true); });
+    });
+    var tf = el("fieldset", {}, [el("legend", { text: "Xác thực 2 lớp (TOTP)" })]);
+    function render2fa() {
+      while (tf.childNodes.length > 1) tf.removeChild(tf.lastChild);
+      if (me.totp) {
+        tf.appendChild(el("p", {}, [el("span", { class: "pill ok", text: "Đang bật" }), " Mỗi lần đăng nhập cần mã 6 số từ ứng dụng xác thực."]));
+        var code = el("input", { placeholder: "Mã hiện tại để tắt", inputmode: "numeric", maxlength: "6" });
+        tf.appendChild(el("div", { class: "row" }, [code, el("button", { type: "button", class: "btn danger", text: "Tắt 2FA", onclick: function () {
+          api("POST", "/api/open/me/totp/disable", { code: code.value.trim() }).then(function () { me.totp = false; toast("Đã tắt 2FA"); render2fa(); }, function (x) { toast(x.message, true); });
+        } })]));
+        return;
+      }
+      tf.appendChild(el("p", { class: "muted", text: "Dùng Google Authenticator, Microsoft Authenticator hoặc Authy để bảo vệ tài khoản." }));
+      tf.appendChild(el("button", { type: "button", class: "btn primary", text: "Bật xác thực 2 lớp", onclick: function () {
+        api("POST", "/api/open/me/totp/setup").then(function (d) {
+          while (tf.childNodes.length > 1) tf.removeChild(tf.lastChild);
+          tf.appendChild(el("p", { text: "1. Quét mã QR bằng ứng dụng xác thực:" }));
+          tf.appendChild(el("img", { class: "qr", src: d.qr, alt: "QR" }));
+          tf.appendChild(el("p", {}, ["Hoặc nhập khoá: ", el("code", { class: "mono", text: d.secret })]));
+          tf.appendChild(el("p", { text: "2. Nhập mã 6 số đang hiển thị để xác nhận:" }));
+          var code = el("input", { id: "a-otp", inputmode: "numeric", maxlength: "6" });
+          tf.appendChild(el("div", { class: "row" }, [code, el("button", { type: "button", class: "btn primary", text: "Xác nhận", onclick: function () {
+            api("POST", "/api/open/me/totp/enable", { code: code.value.trim() }).then(function () { me.totp = true; toast("Đã bật 2FA"); render2fa(); }, function (x) { toast(x.message, true); });
+          } })]));
+        }, function (x) { toast(x.message, true); });
+      } }));
+    }
+    render2fa();
+    v.appendChild(pw); v.appendChild(tf);
   }
 
   show();
