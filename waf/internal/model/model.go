@@ -66,6 +66,66 @@ type DynamicProtection struct {
 	Paths []string `json:"paths"`
 }
 
+// Rule actions.
+const (
+	RuleAllow     = "allow"      // whitelist: skip rate limits, challenges and WAF
+	RuleDeny      = "deny"       // block with 403
+	RuleSkipWAF   = "skip_waf"   // skip OWASP CRS inspection only
+	RuleRateLimit = "rate_limit" // extra per-path rate limit
+)
+
+// PathRule refines protection for part of a site. Rules are evaluated in
+// order; allow and deny stop the evaluation.
+type PathRule struct {
+	Path string `json:"path"`
+	// Exact matches the whole path instead of a prefix.
+	Exact bool `json:"exact"`
+	// Methods limits the rule to these HTTP methods (empty = all).
+	Methods []string `json:"methods"`
+	// IPs limits the rule to these client networks (empty = everyone).
+	IPs       []string  `json:"ips"`
+	Action    string    `json:"action"`
+	RateLimit RateLimit `json:"rate_limit"`
+	Comment   string    `json:"comment"`
+}
+
+func (r *PathRule) normalize() error {
+	if !strings.HasPrefix(r.Path, "/") {
+		return fmt.Errorf("rule path %q must start with /", r.Path)
+	}
+	switch r.Action {
+	case RuleAllow, RuleDeny, RuleSkipWAF:
+	case RuleRateLimit:
+		rl := &r.RateLimit
+		if rl.Requests <= 0 {
+			return fmt.Errorf("rule %s: rate_limit.requests must be > 0", r.Path)
+		}
+		if rl.WindowSec <= 0 {
+			rl.WindowSec = 60
+		}
+		if rl.BlockSec <= 0 {
+			rl.BlockSec = 300
+		}
+	default:
+		return fmt.Errorf("rule %s: action must be allow, deny, skip_waf or rate_limit", r.Path)
+	}
+	for i, m := range r.Methods {
+		m = strings.ToUpper(strings.TrimSpace(m))
+		if m == "" || strings.ContainsAny(m, " /") {
+			return fmt.Errorf("rule %s: invalid method %q", r.Path, m)
+		}
+		r.Methods[i] = m
+	}
+	for i, c := range r.IPs {
+		n, err := ParseCIDR(c)
+		if err != nil {
+			return err
+		}
+		r.IPs[i] = n.String()
+	}
+	return nil
+}
+
 // Site is one protected application.
 type Site struct {
 	ID          int      `json:"id"`
@@ -86,6 +146,7 @@ type Site struct {
 	RateLimit RateLimit         `json:"rate_limit"`
 	Bot       BotChallenge      `json:"bot_challenge"`
 	Dynamic   DynamicProtection `json:"dynamic_protection"`
+	Rules     []PathRule        `json:"rules"`
 	Auth      AuthChallenge     `json:"auth"`
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
@@ -242,6 +303,14 @@ func (s *Site) Normalize() error {
 	}
 	if s.Name == "" {
 		s.Name = s.ServerNames[0]
+	}
+	if len(s.Rules) > 200 {
+		return errors.New("at most 200 rules per site")
+	}
+	for i := range s.Rules {
+		if err := s.Rules[i].normalize(); err != nil {
+			return err
+		}
 	}
 	if err := checkPaths(s.Dynamic.Paths); err != nil {
 		return err

@@ -180,6 +180,7 @@
         if ((s.ip_deny || []).length) feats.push("deny " + s.ip_deny.length);
         if ((s.country_allow || []).length || (s.country_deny || []).length) feats.push("geo");
         if (s.dynamic_protection && (s.dynamic_protection.html || s.dynamic_protection.js)) feats.push("bảo vệ động");
+        if ((s.rules || []).length) feats.push(s.rules.length + " rule");
         tb.appendChild(el("tr", { class: "click", onclick: function () { location.hash = "#/sites/" + s.id; } }, [
           el("td", {}, [el("b", { text: s.name }), el("div", { class: "muted mono", text: s.server_names.join(", ") })]),
           el("td", { class: "mono", text: s.ports.join(", ") }),
@@ -239,6 +240,7 @@
           field(au.password_hash ? "Mật khẩu mới (để trống = giữ nguyên)" : "Mật khẩu", el("input", { id: "f-authp", type: "password", autocomplete: "new-password" }), "8–72 ký tự, lưu dạng bcrypt."),
           field("Hiệu lực (giây)", el("input", { id: "f-autht", type: "number", value: au.ttl_sec || 28800 })),
           field("Bỏ qua đường dẫn", el("textarea", { id: "f-authx", value: (au.exclude_paths || []).join("\n") }))])])]),
+      rulesFieldset(s.rules || []),
       el("fieldset", {}, [el("legend", { text: "Bảo vệ động (chống thu thập dữ liệu)" }), el("div", { class: "grid2" }, [
         el("div", {}, [check("Mã hoá HTML mỗi lần tải trang", "f-dhtml", (s.dynamic_protection || {}).html),
           check("Mã hoá file JavaScript", "f-djs", (s.dynamic_protection || {}).js),
@@ -267,6 +269,7 @@
         auth: { enabled: $("f-auth").checked, password_hash: au.password_hash || "", ttl_sec: num(g("f-autht"), 28800), exclude_paths: lines(g("f-authx")) },
         upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
         dynamic_protection: { html: $("f-dhtml").checked, js: $("f-djs").checked, paths: lines(g("f-dpaths")) },
+        rules: collectRules(),
         auto_tls: $("f-auto").checked, hsts: $("f-hsts").checked, custom_rules: g("f-rules")
       };
       if (g("f-authp")) body.auth.password = g("f-authp");
@@ -276,6 +279,45 @@
       }).catch(function (e) { toast(e.message, true); });
     });
     v.appendChild(form);
+  }
+
+  // ---------- path rules editor ----------
+  var ACTIONS = [["allow", "Cho phép (whitelist)"], ["deny", "Chặn"], ["skip_waf", "Bỏ qua WAF"], ["rate_limit", "Giới hạn tốc độ"]];
+  function ruleRow(r) {
+    r = r || { action: "rate_limit", rate_limit: {} };
+    var rl = r.rate_limit || {};
+    var act = select("", ACTIONS, r.action); act.removeAttribute("id"); act.className = "r-act";
+    var tr = el("tr", {}, [
+      el("td", {}, [el("input", { class: "r-path", value: r.path || "/", placeholder: "/login" })]),
+      el("td", {}, [el("input", { class: "r-exact", type: "checkbox", checked: r.exact })]),
+      el("td", {}, [el("input", { class: "r-methods", value: (r.methods || []).join(","), placeholder: "POST" })]),
+      el("td", {}, [el("input", { class: "r-ips", value: (r.ips || []).join(","), placeholder: "mọi IP" })]),
+      el("td", {}, [act]),
+      el("td", {}, [el("input", { class: "r-req", type: "number", min: "0", value: rl.requests || "", placeholder: "5" })]),
+      el("td", {}, [el("input", { class: "r-win", type: "number", min: "0", value: rl.window_sec || "", placeholder: "60" })]),
+      el("td", {}, [el("input", { class: "r-blk", type: "number", min: "0", value: rl.block_sec || "", placeholder: "300" })]),
+      el("td", {}, [el("button", { type: "button", class: "btn ghost small", text: "✕", onclick: function () { tr.parentNode.removeChild(tr); } })])
+    ]);
+    return tr;
+  }
+  function rulesFieldset(rules) {
+    var tb = el("tbody", { id: "rules-body" });
+    rules.forEach(function (r) { tb.appendChild(ruleRow(r)); });
+    return el("fieldset", {}, [el("legend", { text: "Rule theo đường dẫn" }),
+      el("div", { class: "hint", text: "Xét theo thứ tự; Cho phép/Chặn dừng việc xét. Ví dụ: giới hạn POST /login 5 lần/60s; cho phép /webhook từ IP đối tác; bỏ qua WAF cho /api/upload." }),
+      el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Đường dẫn", "Chính xác", "Method", "IP nguồn", "Hành động", "Request", "Trong (s)", "Chặn (s)", ""].map(function (h) { return el("th", { text: h }); }))]), tb])]),
+      el("div", { class: "spacer" }),
+      el("button", { type: "button", class: "btn small", text: "+ Thêm rule", onclick: function () { tb.appendChild(ruleRow()); } })]);
+  }
+  function collectRules() {
+    var out = [];
+    Array.prototype.forEach.call(document.querySelectorAll("#rules-body tr"), function (tr) {
+      var q = function (c) { return tr.querySelector("." + c); };
+      var r = { path: q("r-path").value.trim(), exact: q("r-exact").checked, methods: lines(q("r-methods").value.toUpperCase()), ips: lines(q("r-ips").value), action: q("r-act").value };
+      if (r.action === "rate_limit") r.rate_limit = { requests: num(q("r-req").value, 0), window_sec: num(q("r-win").value, 60), block_sec: num(q("r-blk").value, 300) };
+      if (r.path) out.push(r);
+    });
+    return out;
   }
 
   // ---------- events ----------

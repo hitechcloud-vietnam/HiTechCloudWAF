@@ -11,6 +11,7 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ chọn site theo Host (tên chính xác, wildcard *.domain, hoặc "_")
           ├─ redirect HTTPS (tuỳ chọn)
           ├─ ACL IP: ip_deny → 403, ip_allow (nếu có) → 403
+          ├─ Rule theo đường dẫn (allow / deny / skip_waf / rate_limit)
           ├─ Rate limit theo IP/site → 429 + thời gian chặn
           ├─ Auth challenge (mật khẩu) → trang đăng nhập
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
@@ -40,7 +41,32 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
 | `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
+| `rules` | Rule theo đường dẫn (xem bên dưới) |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
+
+### Rule theo đường dẫn (`rules`)
+
+```json
+"rules": [
+  {"path": "/login", "exact": true, "methods": ["POST"], "action": "rate_limit",
+   "rate_limit": {"requests": 5, "window_sec": 60, "block_sec": 300}},
+  {"path": "/webhook", "action": "allow", "ips": ["203.0.113.0/24"]},
+  {"path": "/api/upload", "action": "skip_waf"},
+  {"path": "/wp-admin", "action": "deny"}
+]
+```
+
+| Hành động | Tác dụng |
+|---|---|
+| `allow` | Whitelist: bỏ qua rate limit, anti-bot, mật khẩu và WAF (ACL IP/quốc gia vẫn áp dụng) |
+| `deny` | Trả về 403 |
+| `skip_waf` | Chỉ bỏ qua bộ lọc OWASP CRS |
+| `rate_limit` | Giới hạn tốc độ riêng cho đường dẫn (cộng thêm vào giới hạn chung của site) |
+
+- Rule xét theo thứ tự; `allow` và `deny` dừng việc xét các rule sau.
+- `path` khớp theo tiền tố, hoặc khớp chính xác nếu đặt `exact`.
+- `methods` và `ips` là điều kiện tùy chọn.
+- Trong console, quản lý ở phần **Rule theo đường dẫn** của form ứng dụng.
 
 ### Anti-bot challenge (`bot_challenge`)
 

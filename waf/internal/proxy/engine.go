@@ -49,7 +49,28 @@ type upstream struct {
 	downUntil atomic.Int64
 }
 
+type ruleRT struct {
+	model.PathRule
+	nets []*net.IPNet
+}
+
+func (r *ruleRT) matches(req *http.Request, ip net.IP) bool {
+	p := req.URL.Path
+	if r.Exact {
+		if p != r.Path {
+			return false
+		}
+	} else if !strings.HasPrefix(p, r.Path) {
+		return false
+	}
+	if len(r.Methods) > 0 && !hasCode(r.Methods, req.Method) {
+		return false
+	}
+	return len(r.nets) == 0 || contains(r.nets, ip)
+}
+
 type siteRT struct {
+	rules     []ruleRT
 	site      model.Site
 	waf       coraza.WAF
 	allow     []*net.IPNet
@@ -190,6 +211,14 @@ func (e *Engine) Apply(sites []model.Site, certs []model.Cert) error {
 		for _, c := range s.IPDeny {
 			n, _ := model.ParseCIDR(c)
 			srt.deny = append(srt.deny, n)
+		}
+		for _, r := range s.Rules {
+			rr := ruleRT{PathRule: r}
+			for _, c := range r.IPs {
+				n, _ := model.ParseCIDR(c)
+				rr.nets = append(rr.nets, n)
+			}
+			srt.rules = append(srt.rules, rr)
 		}
 		for _, raw := range s.Upstreams {
 			u, err := url.Parse(raw)
@@ -497,7 +526,34 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 			return
 		}
 	}
-	if rl := s.site.RateLimit; rl.Requests > 0 {
+	// Path rules: deny and allow stop the evaluation.
+	allowed, skipWAF := false, false
+rules:
+	for i := range s.rules {
+		rule := &s.rules[i]
+		if !rule.matches(r, ip) {
+			continue
+		}
+		switch rule.Action {
+		case model.RuleDeny:
+			e.block(w, e.event(r, s, ip, "rule", "block", http.StatusForbidden))
+			return
+		case model.RuleAllow:
+			allowed = true
+			break rules
+		case model.RuleSkipWAF:
+			skipWAF = true
+		case model.RuleRateLimit:
+			rl := rule.RateLimit
+			key := strconv.Itoa(s.site.ID) + "|r" + strconv.Itoa(i) + "|" + ip.String()
+			if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
+				e.block(w, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
+				return
+			}
+		}
+	}
+
+	if rl := s.site.RateLimit; rl.Requests > 0 && !allowed {
 		key := strconv.Itoa(s.site.ID) + "|" + ip.String()
 		if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
 			e.block(w, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
@@ -508,11 +564,11 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 	if e.handleEngineEndpoint(w, r, s, ip, isTLS) {
 		return
 	}
-	if !e.challenges(w, r, s, ip) {
+	if !allowed && !e.challenges(w, r, s, ip) {
 		return
 	}
 
-	if s.waf != nil {
+	if s.waf != nil && !allowed && !skipWAF {
 		tx := s.waf.NewTransaction()
 		defer func() {
 			tx.ProcessLogging()

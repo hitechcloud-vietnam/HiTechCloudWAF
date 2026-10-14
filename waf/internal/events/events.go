@@ -169,7 +169,7 @@ func (l *Log) Add(e Event) {
 	case e.Kind == "rate_limit":
 		c.RateLimit++
 		b.RateLimit++
-	case e.Kind == "ip_deny" || e.Kind == "ip_allow" || e.Kind == "geo":
+	case e.Kind == "ip_deny" || e.Kind == "ip_allow" || e.Kind == "geo" || e.Kind == "rule":
 		c.ACL++
 		b.ACL++
 	case e.Kind == "bot":
