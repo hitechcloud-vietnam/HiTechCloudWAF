@@ -7,4 +7,4 @@ build.sh
 compose.yml
 __pycache__
 .cursor
-.vscode
+.vscode.claude/
