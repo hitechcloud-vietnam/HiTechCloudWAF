@@ -20,14 +20,23 @@ type wafKey struct {
 	threshold int
 	disabled  string
 	bodyLimit int
+	maxArgs   int
 	custom    string
 }
 
 func keyFor(s *model.Site, bodyLimit int) wafKey {
 	d := append([]int(nil), s.DisabledRules...)
 	sort.Ints(d)
-	return wafKey{mode: s.Mode, paranoia: s.Paranoia, threshold: s.AnomalyThreshold, disabled: fmt.Sprint(d), bodyLimit: bodyLimit, custom: s.CustomRules}
+	maxArgs := s.MaxArgs
+	if maxArgs <= 0 {
+		maxArgs = model.DefaultMaxArgs
+	}
+	return wafKey{mode: s.Mode, paranoia: s.Paranoia, threshold: s.AnomalyThreshold, disabled: fmt.Sprint(d), bodyLimit: bodyLimit, maxArgs: maxArgs, custom: s.CustomRules}
 }
+
+// jsonDepthLimit is the deepest JSON request body accepted (Coraza default
+// 1024); deeper documents fail to parse and are refused by rule 200002.
+const jsonDepthLimit = 64
 
 const allowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form-data| |multipart/related| |text/xml| |application/xml| |application/soap+xml| |application/json| |application/cloudevents+json| |application/cloudevents-batch+json| |application/octet-stream| |application/grpc| |application/grpc-web|"
 
@@ -54,14 +63,23 @@ func (p *WAFPool) directives(k wafKey, disabled []int) string {
 	b.WriteString("Include @coraza.conf-recommended\n")
 	fmt.Fprintf(&b, "SecRuleEngine %s\n", engine)
 	b.WriteString("SecRequestBodyAccess On\nSecResponseBodyAccess Off\n")
+	// Inspection cost grows linearly with the number of arguments (≈0.4 ms
+	// per JSON field at PL1). Coraza stops parsing at the limit and rules
+	// 100002/100003 below refuse the request with 400 before any CRS rule
+	// of the phase runs; CRS 920380 (tx.max_num_args below) applies the same
+	// limit to query and body arguments together.
+	fmt.Fprintf(&b, "SecArgumentsLimit %d\nSecRequestBodyJsonDepthLimit %d\n", k.maxArgs, jsonDepthLimit)
 	fmt.Fprintf(&b, "SecRequestBodyLimit %d\nSecRequestBodyInMemoryLimit %d\n", k.bodyLimit, min(k.bodyLimit, 131072))
 	// Keep serving large uploads; only the first bodyLimit bytes are inspected.
 	b.WriteString("SecRequestBodyLimitAction ProcessPartial\n")
 	// Binary uploads are not parsed by any body processor; scanning them
 	// with text rules costs seconds per megabyte and finds nothing.
 	b.WriteString(`SecRule REQUEST_HEADERS:Content-Type "@rx (?i)^(?:application/(?:octet-stream|zip|gzip|x-tar|pdf|grpc)|image/|video/|audio/|font/)" "id:100001,phase:1,pass,nolog,ctl:requestBodyAccess=Off"` + "\n")
+	b.WriteString(`SecRule ARGUMENTS_LIMIT_REACHED "@eq 1" "id:100002,phase:1,deny,status:400,log,t:none,severity:2,msg:'Too many arguments in the query string'"` + "\n")
+	b.WriteString(`SecRule ARGUMENTS_LIMIT_REACHED "@eq 1" "id:100003,phase:2,deny,status:400,log,t:none,severity:2,msg:'Too many arguments in the request body'"` + "\n")
 	b.WriteString("Include @crs-setup.conf.example\n")
 	fmt.Fprintf(&b, `SecAction "id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=%d"`+"\n", k.paranoia)
+	fmt.Fprintf(&b, `SecAction "id:900300,phase:1,pass,t:none,nolog,setvar:tx.max_num_args=%d"`+"\n", k.maxArgs)
 	fmt.Fprintf(&b, `SecAction "id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=4"`+"\n", k.threshold)
 	// CRS default content types plus binary uploads (inspected as metadata only).
 	fmt.Fprintf(&b, `SecAction "id:900220,phase:1,pass,t:none,nolog,setvar:'tx.allowed_request_content_type=%s'"`+"\n", allowedContentTypes)

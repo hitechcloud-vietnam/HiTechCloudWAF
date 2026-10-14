@@ -1778,6 +1778,22 @@ components:
             type: integer
             minimum: 900000
             maximum: 999999
+        max_args:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 0
+          description: >-
+            Most request arguments (query, form or JSON fields) inspected; a
+            request with more is refused with 400. 0 = 255.
+        static_fast_path:
+          type: boolean
+          default: false
+          description: >-
+            GET/HEAD requests for static files (no query string, no body,
+            extension such as .css, .js, .png, .woff2) run only CRS phase 1
+            (protocol and scanner checks). ACL, rate limits and challenges
+            still apply.
         rate_limit:
           $ref: "#/components/schemas/RateLimit"
         bot_challenge:
@@ -1933,7 +1949,7 @@ components:
           type: string
         kind:
           type: string
-          description: "What decided: `waf`, `rule` (path rule deny), `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot`, `auth`, `threat_intel` or `bad_path` (malformed request path)."
+          description: "What decided: `waf`, `rule` (path rule deny), `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot`, `auth`, `threat_intel`, `bad_path` (malformed request path) or `body_limit` (body parsed into arguments larger than `body_args_limit_kb`)."
         action:
           type: string
           description: "`block` or `monitor`; `challenge` for `threat_intel` events."

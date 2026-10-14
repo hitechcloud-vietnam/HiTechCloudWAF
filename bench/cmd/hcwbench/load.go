@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,7 @@ type loadSpec struct {
 	warmup  time.Duration
 	measure time.Duration
 	next    func(n uint64) request // n is a global request counter
-	expect  int                    // expected status; anything else is an error
+	expect  []int                  // expected statuses; anything else is an error
 	// onWindow is called at the start and the end of the measured window
 	// (used to sample engine CPU time exactly over that window).
 	onWindow func(start bool)
@@ -135,7 +136,7 @@ func runLoad(ctx context.Context, s loadSpec) loadResult {
 				if !start.Before(winStart) {
 					w.lat = append(w.lat, d)
 					w.bytes += n
-					if err != nil || status != s.expect {
+					if err != nil || !slices.Contains(s.expect, status) {
 						w.errs++
 						if w.firstErr == "" {
 							if err != nil {

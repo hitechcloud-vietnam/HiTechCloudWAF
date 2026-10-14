@@ -31,8 +31,13 @@ import (
 
 // Options configure the engine.
 type Options struct {
-	Bind           string // address to bind site ports on ("" = all)
-	BodyLimit      int    // bytes of request body inspected
+	Bind      string // address to bind site ports on ("" = all)
+	BodyLimit int    // bytes of request body inspected
+	// ArgsBodyLimit is the largest body parsed into arguments (JSON, forms,
+	// XML: everything but multipart and binary uploads) that sites in block
+	// mode accept; larger ones get 413 (0 = min(128 KiB, BodyLimit)). Like
+	// ModSecurity's SecRequestBodyNoFilesLimit.
+	ArgsBodyLimit  int
 	TrustedProxies []*net.IPNet
 	Brand          Brand
 	ExtraRules     string
@@ -53,6 +58,11 @@ type Options struct {
 	// crawlers for bot_challenge.allow_verified (both optional).
 	ThreatIntel ThreatIntel
 	GoodBots    GoodBots
+
+	// MaxInspections bounds the OWASP CRS inspections running at once,
+	// across all sites (0 = 2×GOMAXPROCS). Other requests wait for a slot
+	// and get 503 if none frees up in time.
+	MaxInspections int
 }
 
 type upstream struct {
@@ -139,6 +149,8 @@ type Engine struct {
 	limiter *limiter
 	cache   *respCache // nil when disabled
 	rt      atomic.Pointer[runtime]
+	// inspectSem holds one token per running WAF inspection.
+	inspectSem chan struct{}
 
 	mu        sync.Mutex
 	listeners map[int]*listener
@@ -186,10 +198,18 @@ func New(ctx context.Context, opt Options) *Engine {
 		opt.Secret = make([]byte, 32)
 		_, _ = crand.Read(opt.Secret)
 	}
+	if opt.ArgsBodyLimit <= 0 {
+		opt.ArgsBodyLimit = defaultArgsBodyLimit
+	}
+	opt.ArgsBodyLimit = min(opt.ArgsBodyLimit, opt.BodyLimit)
 	if opt.CacheMB == 0 {
 		opt.CacheMB = defaultCacheMB
 	}
-	e := &Engine{opt: opt, pool: NewWAFPool(opt.ExtraRules), limiter: newLimiter(), listeners: map[int]*listener{}, ctx: ctx}
+	if opt.MaxInspections <= 0 {
+		opt.MaxInspections = defaultMaxInspections()
+	}
+	e := &Engine{opt: opt, pool: NewWAFPool(opt.ExtraRules), limiter: newLimiter(), listeners: map[int]*listener{}, ctx: ctx,
+		inspectSem: make(chan struct{}, opt.MaxInspections)}
 	if opt.CacheMB > 0 {
 		e.cache = newRespCache(int64(opt.CacheMB) << 20)
 	}
@@ -780,33 +800,10 @@ rules:
 	}
 
 	if s.waf != nil && !allowed && !skipWAF {
-		tx := s.waf.NewTransaction()
-		defer func() {
-			tx.ProcessLogging()
-			_ = tx.Close()
-		}()
-		it, err := inspect(tx, r, ip)
-		if err != nil {
-			e.opt.Log.Warn("waf inspection failed", "site", s.site.ID, "err", err)
-			http.Error(w, "bad request", http.StatusBadRequest)
+		pass, release := e.inspectSite(w, r, s, ip)
+		defer release()
+		if !pass {
 			return
-		}
-		if it != nil {
-			status := it.Status
-			if status < 400 || status > 599 {
-				status = http.StatusForbidden
-			}
-			ev := e.event(r, s, ip, "waf", "block", status)
-			ev.Rules, ev.Tags = matched(tx)
-			e.block(w, r, ev)
-			return
-		}
-		if s.site.Mode == model.ModeMonitor {
-			if rules, tags := matched(tx); anomalyExceeded(tx) {
-				ev := e.event(r, s, ip, "waf", "monitor", 0)
-				ev.Rules, ev.Tags = rules, tags
-				e.opt.Events.Add(ev)
-			}
 		}
 	}
 
@@ -826,57 +823,6 @@ func (e *Engine) deliver(w http.ResponseWriter, r *http.Request, s *siteRT, ip n
 	}
 	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, ctxVal{ip: ip, tls: isTLS, fill: e.storeRequest(s, r)}))
 	s.forward(w, r, ip)
-}
-
-// inspect runs Coraza phases 0–2. It mirrors coraza/http.processRequest but
-// uses the resolved client address.
-func inspect(tx types.Transaction, r *http.Request, ip net.IP) (*types.Interruption, error) {
-	_, portStr, _ := net.SplitHostPort(r.RemoteAddr)
-	port, _ := strconv.Atoi(portStr)
-	tx.ProcessConnection(ip.String(), port, "", 0)
-	tx.ProcessURI(r.URL.String(), r.Method, r.Proto)
-	for k, vs := range r.Header {
-		for _, v := range vs {
-			tx.AddRequestHeader(k, v)
-		}
-	}
-	if r.Host != "" {
-		tx.AddRequestHeader("Host", r.Host)
-		tx.SetServerName(r.Host)
-	}
-	for _, te := range r.TransferEncoding {
-		tx.AddRequestHeader("Transfer-Encoding", te)
-	}
-	if it := tx.ProcessRequestHeaders(); it != nil {
-		return it, nil
-	}
-	if tx.IsRequestBodyAccessible() && r.Body != nil && r.Body != http.NoBody {
-		it, _, err := tx.ReadRequestBodyFrom(r.Body)
-		if err != nil {
-			return nil, err
-		}
-		if it != nil {
-			return it, nil
-		}
-		rbr, err := tx.RequestBodyReader()
-		if err != nil {
-			return nil, err
-		}
-		r.Body = readCloser{Reader: ioMulti(rbr, r.Body), c: r.Body}
-	}
-	return tx.ProcessRequestBody()
-}
-
-// anomaly evaluation rule of CRS
-const ruleInboundAnomaly = 949110
-
-func anomalyExceeded(tx types.Transaction) bool {
-	for _, m := range tx.MatchedRules() {
-		if m.Rule().ID() == ruleInboundAnomaly {
-			return true
-		}
-	}
-	return false
 }
 
 func matched(tx types.Transaction) ([]events.Rule, []string) {

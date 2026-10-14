@@ -17,6 +17,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Limits of request inspection.
+const (
+	DefaultMaxArgs = 255   // arguments per request when max_args is 0
+	MaxMaxArgs     = 10000 // largest accepted max_args
+)
+
 // Protection modes of a site.
 const (
 	ModeBlock   = "block"   // detect and block
@@ -235,6 +241,15 @@ type Site struct {
 	AnomalyThreshold int `json:"anomaly_threshold"`
 	// DisabledRules are CRS rule IDs removed for this site (false positives).
 	DisabledRules []int `json:"disabled_rules"`
+	// MaxArgs caps the request arguments (query, form or JSON fields) the
+	// CRS inspects; a request with more is refused (0 = DefaultMaxArgs).
+	// Inspection cost grows with every argument.
+	MaxArgs int `json:"max_args,omitempty"`
+	// StaticFastPath lets GET/HEAD requests for static files (no query, no
+	// body, extension such as .css or .png) skip the CRS request-body phase:
+	// only the protocol and scanner checks of phase 1 run. ACL, rate limits
+	// and challenges still apply.
+	StaticFastPath bool `json:"static_fast_path,omitempty"`
 
 	RateLimit RateLimit         `json:"rate_limit"`
 	Bot       BotChallenge      `json:"bot_challenge"`
@@ -376,6 +391,9 @@ func (s *Site) Normalize() error {
 	}
 	if s.AnomalyThreshold < 1 || s.AnomalyThreshold > 1000 {
 		return errors.New("anomaly_threshold must be 1..1000")
+	}
+	if s.MaxArgs < 0 || s.MaxArgs > MaxMaxArgs {
+		return fmt.Errorf("max_args must be 0..%d (0 = %d)", MaxMaxArgs, DefaultMaxArgs)
 	}
 	for _, r := range s.DisabledRules {
 		if r < 900000 || r > 999999 {

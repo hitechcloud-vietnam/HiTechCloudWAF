@@ -53,10 +53,13 @@ Bảng Markdown in ra stdout, tiến độ in ra stderr; `-json` ghi thêm số 
 | 2 | Site `mode: off` – proxy thuần |
 | 3 | `mode: block`, paranoia 1, GET có query string 5 tham số, header giống trình duyệt (UA, Accept*, Cookie 3 giá trị, Referer) |
 | 4 | Như 3 nhưng `POST /api/orders` JSON ~2 KB (khoảng 100 trường) |
+| 4b | Như 4 nhưng body JSON phẳng 1 000 khoá (~28 KB). Engine có giới hạn số tham số trả 400; bản cũ trả 200 (cả hai đều được chấp nhận) |
 | 5 | Như 3 với paranoia 2 |
 | 6 | PL1, request tấn công SQLi (`UNION SELECT`) – mong đợi 403 |
 | 7 | PL1 + `dynamic_protection: {html: true}`, trang 50 KB |
 | 7a | PL1, trang 50 KB, không dynamic – đối chứng của 7 |
+| 9 | PL1, `GET /assets/css/app.css` (file tĩnh, không query), header trình duyệt |
+| 9a | Như 9 với `static_fast_path: true` (chỉ chạy CRS phase 1) |
 | 8 | 200 site PL1 cùng cổng, tải chia vòng tròn qua 200 tên miền (chi phí định tuyến, thời gian Apply khi tạo lần lượt 200 site) |
 
 ## Tham số

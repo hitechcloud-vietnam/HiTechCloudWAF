@@ -22,6 +22,8 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           │   (bot tìm kiếm đã xác minh bằng DNS được bỏ qua nếu bật allow_verified)
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
+          │   (giới hạn số tham số/kích thước body và số lượt kiểm tra đồng
+          │   thời, xem "Giới hạn kiểm tra"; file tĩnh có thể chỉ chạy phase 1)
           ├─ Cache response tĩnh trong RAM (tuỳ chọn) → trả ngay, không gọi upstream
           ├─ Reverse proxy → upstream (round-robin / weighted / least_conn /
           │   ip_hash / random, sticky session; upstream lỗi bị loại 10s)
@@ -41,6 +43,8 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `paranoia` | 1–4. Mặc định 1, ít chặn nhầm. PL3–4 bắt được nhiều hơn nhưng cần tinh chỉnh |
 | `anomaly_threshold` | Ngưỡng điểm CRS để chặn (mặc định 5) |
 | `disabled_rules` | Danh sách ID rule CRS tắt cho site, dùng khi bị chặn nhầm |
+| `max_args` | Số tham số tối đa (query, form, trường JSON) được kiểm tra; vượt quá → 400. `0` (mặc định) = 255, tối đa 10000 |
+| `static_fast_path` | `true`: request file tĩnh chỉ chạy CRS phase 1 (mặc định `false`, xem "Giới hạn kiểm tra") |
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Danh sách IP hoặc CIDR |
 | `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
@@ -135,8 +139,63 @@ trên Google Cloud đều có PTR dạng này.
 chuyển khách sang node khác, khách không phải giải lại challenge.
 
 Body nhị phân (octet-stream, ảnh, video, zip, pdf, gRPC) chỉ được kiểm tra
-phần header, không quét nội dung. Với body JSON/form, engine kiểm tra
-`body_limit_kb` đầu tiên, phần còn lại vẫn chuyển đủ lên upstream.
+phần header, không quét nội dung. Với body multipart, engine kiểm tra
+`body_limit_kb` đầu tiên, phần còn lại vẫn chuyển đủ lên upstream. Body JSON,
+form, XML lớn hơn `body_args_limit_kb` bị từ chối (xem bên dưới).
+
+### Giới hạn kiểm tra
+
+OWASP CRS tốn CPU theo **số tham số** và **số byte** được kiểm tra: ở PL1
+khoảng 0,25 ms cho mỗi tham số query, 0,4 ms cho mỗi trường JSON và 6–8 µs
+cho mỗi byte giá trị (body JSON 1 MB ≈ 8 giây CPU). Không giới hạn thì vài
+request mỗi giây đủ chiếm hết CPU của node. Engine đặt các giới hạn sau:
+
+| Giới hạn | Mặc định | Vượt quá |
+|---|---|---|
+| Số tham số mỗi nhóm (query, body) – `max_args` của site | 255 | 400, rule 100002 (query) / 100003 (body), trước khi rule CRS nào của phase đó chạy |
+| Tổng tham số query + body (CRS `tx.max_num_args`, cùng giá trị `max_args`) | 255 | rule CRS 920380 cộng điểm critical (chặn ở ngưỡng mặc định 5) |
+| Độ sâu lồng nhau của JSON | 64 | 400, rule 200002 (lỗi phân tích body) |
+| Body được phân tích thành tham số (JSON, form, XML, text – trừ multipart và nhị phân) – `body_args_limit_kb` của node | 128 KB (như `SecRequestBodyNoFilesLimit` của ModSecurity), không quá `body_limit_kb` | site `block`: 413, sự kiện loại `body_limit`. Site `monitor`: chỉ kiểm tra 128 KB đầu, ghi sự kiện `body_limit`/`monitor`, request vẫn đi qua |
+| Số lượt kiểm tra CRS chạy cùng lúc trên node – `waf_concurrency` | 2 × số lõi (`GOMAXPROCS`) | request chờ; khách ngắt kết nối hoặc chờ quá 10 giây → 503 (`Retry-After: 5`) |
+
+Site `monitor` không bị chặn vì vượt `max_args`, nhưng chỉ `max_args` tham số
+đầu được kiểm tra và sự kiện `monitor` vẫn được ghi (rule 100002/100003).
+API cần body lớn hơn có thể tăng `body_args_limit_kb` trên node, hoặc dùng rule
+`skip_waf` cho đường dẫn đó; site cần nhiều trường hơn (ví dụ form quản trị
+lớn) tăng `max_args`.
+
+Thêm vào đó:
+
+- Body được đọc **trước** khi chiếm lượt kiểm tra, nên khách upload chậm không
+  giữ lượt của người khác. Body ≤ 128 KB nằm trong RAM, lớn hơn được ghi ra
+  file tạm và xoá khi request xong.
+- Transaction Coraza (vài MB mỗi request) được đóng **ngay khi có kết quả**,
+  trước khi proxy lên upstream. Response dài (SSE, long polling, tải file)
+  không còn giữ bộ nhớ của WAF.
+
+#### Đường tắt cho file tĩnh (`static_fast_path`)
+
+Mặc định tắt. Khi bật, request thỏa **tất cả** điều kiện sau chỉ chạy phase 1
+của CRS (kiểm tra giao thức, method, scanner, header), không chạy phase 2:
+
+- method `GET` hoặc `HEAD`, không có query string (kể cả `?` rỗng), không có body;
+- đường dẫn kết thúc bằng `.css .js .mjs .map .png .jpg .jpeg .gif .svg .webp
+  .avif .ico .bmp .woff .woff2 .ttf .otf .eot`;
+- đường dẫn không có `;` và không có đoạn nào mang đuôi script (`.php`, `.asp`,
+  `.aspx`, `.jsp`, `.cgi`, `.pl`, `.py`…), vì `/index.php/app.css` chạy
+  `index.php` trên nhiều máy chủ.
+
+Điểm bất thường của phase 1 vẫn được đánh giá (CRS early blocking, rule
+949111), nên scanner như sqlmap, nikto vẫn bị chặn ở file tĩnh. ACL IP, quốc
+gia, rule đường dẫn, threat intelligence, rate limit, auth và anti-bot
+challenge **luôn** chạy như bình thường.
+
+Đánh đổi: phase 2 là nơi CRS kiểm tra cookie và tham số, nên cookie chứa
+payload tấn công gửi kèm request file tĩnh sẽ không bị phát hiện. Chỉ bật khi
+file tĩnh thực sự do web server tĩnh/CDN phục vụ, không đi qua mã ứng dụng
+(ví dụ framework định tuyến mọi đường dẫn vào một controller). Đo trên máy
+4 vCPU: request `.css` với header trình duyệt giảm từ ~2,4–2,6 ms xuống ~0,65 ms
+CPU (xem `bench/RESULTS.md`).
 
 Gợi ý: bật `monitor` vài ngày để xem log, thêm `disabled_rules` cho các rule
 chặn nhầm, rồi mới chuyển sang `block`.
@@ -556,6 +615,12 @@ thật.
 `go test -race ./...` gồm:
 
 - chặn SQLi, XSS, path traversal và RCE ở cả query lẫn body JSON/form;
+- giới hạn số tham số, độ sâu JSON, kích thước body tham số, số lượt kiểm tra
+  đồng thời (503 khi khách bỏ đi), lượt kiểm tra được trả ngay khi upstream
+  còn đang stream; body (RAM, file tạm, vượt `body_limit_kb`, chunked) tới
+  upstream nguyên vẹn sau khi transaction đã đóng; `static_fast_path`;
+- bộ mã hoá dynamic protection cho ra đúng từng byte như bản cũ với cùng khoá,
+  script được bảo vệ chạy đúng trong Node.js;
 - request hợp lệ có tiếng Việt và upload 3 MB đều đi qua;
 - chế độ monitor;
 - rate limit, ACL, wildcard host;

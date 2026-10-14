@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 )
@@ -29,16 +30,6 @@ const maxDynamicBody = 4 << 20
 // dynamicMask is the keystream; the JavaScript decoders mirror it exactly.
 func dynamicMask(key []byte, i int) byte { return key[i&15] ^ byte(i>>4) }
 
-func dynamicEncode(b []byte) (payload string, key []byte) {
-	key = make([]byte, 16)
-	_, _ = rand.Read(key)
-	out := make([]byte, len(b))
-	for i, c := range b {
-		out[i] = c ^ dynamicMask(key, i)
-	}
-	return base64.StdEncoding.EncodeToString(out), key
-}
-
 // dynamicDecode is the Go twin of the JavaScript decoder (used by tests).
 func dynamicDecode(payload string, key []byte) ([]byte, error) {
 	b, err := base64.StdEncoding.DecodeString(payload)
@@ -51,53 +42,149 @@ func dynamicDecode(payload string, key []byte) ([]byte, error) {
 	return b, nil
 }
 
-// ident returns a fresh random JavaScript identifier, so the loader itself
-// does not have a stable fingerprint either.
-func ident() string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	b := make([]byte, 9)
+// The encoders below write the whole response into one buffer allocated at
+// its final size: the payload is XORed and base64-encoded in small chunks
+// straight into it, with no intermediate copies of the body.
+
+const (
+	dynKeyLen   = 16
+	dynIdentRnd = 9 // random letters of an identifier, after "_"
+	dynIdents   = 5 // identifiers per loader: 1 for the wrapper + 4 for the decoder
+	// dynRandLen is the randomness of one response, read at once: the key,
+	// then the identifiers in the order they are used.
+	dynRandLen = dynKeyLen + dynIdents*dynIdentRnd
+)
+
+type dynIdent [1 + dynIdentRnd]byte
+
+// dynamicRand returns fresh random bytes for one response.
+func dynamicRand() []byte {
+	b := make([]byte, dynRandLen)
 	_, _ = rand.Read(b)
-	out := []byte{'_'}
-	for _, c := range b {
-		out = append(out, letters[int(c)%len(letters)])
+	return b
+}
+
+// dynamicIdents turns rnd (after the key) into JavaScript identifiers, so
+// the loader itself does not have a stable fingerprint either.
+func dynamicIdents(rnd []byte) (ids [dynIdents]dynIdent) {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	rnd = rnd[dynKeyLen:]
+	for n := range ids {
+		ids[n][0] = '_'
+		for j, c := range rnd[n*dynIdentRnd : (n+1)*dynIdentRnd] {
+			ids[n][1+j] = letters[int(c)%len(letters)]
+		}
 	}
-	return string(out)
+	return ids
 }
 
-func keyLiteral(key []byte) string {
-	parts := make([]string, len(key))
-	for i, k := range key {
-		parts[i] = strconv.Itoa(int(k))
+// appendPayload appends base64(b XOR keystream).
+func appendPayload(dst, b, key []byte) []byte {
+	n := base64.StdEncoding.EncodedLen(len(b))
+	dst = slices.Grow(dst, n)
+	out := dst[len(dst) : len(dst)+n]
+	// A multiple of 3 (only the last chunk is padded) and of 16 (every
+	// chunk starts at a keystream block).
+	var chunk [3 << 10]byte
+	o := 0
+	for i := 0; i < len(b); i += len(chunk) {
+		c := chunk[:min(len(chunk), len(b)-i)]
+		src := b[i : i+len(c)]
+		for j := 0; j < len(c); j += 16 {
+			// dynamicMask, one 16-byte block at a time
+			blk := byte((i + j) >> 4)
+			s, d := src[j:min(j+16, len(c))], c[j:min(j+16, len(c))]
+			for t := range d {
+				d[t] = s[t] ^ key[t] ^ blk
+			}
+		}
+		base64.StdEncoding.Encode(out[o:], c)
+		o += base64.StdEncoding.EncodedLen(len(c))
 	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return dst[:len(dst)+n]
 }
 
-// decoderJS returns an expression that evaluates to the decoded UTF-8 text.
-func decoderJS(payload string, key []byte) string {
-	p, _ := json.Marshal(payload)
-	d, k, u, i := ident(), ident(), ident(), ident()
-	return "(function(){var " + d + "=atob(" + string(p) + ")," + k + "=" + keyLiteral(key) +
-		"," + u + "=new Uint8Array(" + d + ".length);for(var " + i + "=0;" + i + "<" + d + ".length;" + i + "++)" +
-		u + "[" + i + "]=" + d + ".charCodeAt(" + i + ")^" + k + "[" + i + "&15]^((" + i + ">>4)&255);" +
-		"return new TextDecoder(\"utf-8\").decode(" + u + ")})()"
+// appendDecoder appends an expression that evaluates to the decoded UTF-8
+// text. ids are its four identifiers. The base64 alphabet needs no escaping
+// inside a JavaScript string.
+func appendDecoder(dst, b, key []byte, ids []dynIdent) []byte {
+	d, k, u, i := ids[0][:], ids[1][:], ids[2][:], ids[3][:]
+	dst = append(dst, "(function(){var "...)
+	dst = append(dst, d...)
+	dst = append(dst, `=atob("`...)
+	dst = appendPayload(dst, b, key)
+	dst = append(dst, `"),`...)
+	dst = append(dst, k...)
+	dst = append(dst, "=["...)
+	for n, c := range key {
+		if n > 0 {
+			dst = append(dst, ',')
+		}
+		dst = strconv.AppendInt(dst, int64(c), 10)
+	}
+	dst = append(dst, "],"...)
+	dst = append(dst, u...)
+	dst = append(dst, "=new Uint8Array("...)
+	dst = append(dst, d...)
+	dst = append(dst, ".length);for(var "...)
+	dst = append(dst, i...)
+	dst = append(dst, "=0;"...)
+	dst = append(dst, i...)
+	dst = append(dst, '<')
+	dst = append(dst, d...)
+	dst = append(dst, ".length;"...)
+	dst = append(dst, i...)
+	dst = append(dst, "++)"...)
+	dst = append(dst, u...)
+	dst = append(dst, '[')
+	dst = append(dst, i...)
+	dst = append(dst, "]="...)
+	dst = append(dst, d...)
+	dst = append(dst, ".charCodeAt("...)
+	dst = append(dst, i...)
+	dst = append(dst, ")^"...)
+	dst = append(dst, k...)
+	dst = append(dst, '[')
+	dst = append(dst, i...)
+	dst = append(dst, "&15]^(("...)
+	dst = append(dst, i...)
+	dst = append(dst, `>>4)&255);return new TextDecoder("utf-8").decode(`...)
+	dst = append(dst, u...)
+	return append(dst, ")})()"...)
 }
 
-func protectHTML(html []byte) []byte {
-	payload, key := dynamicEncode(html)
-	fn := ident()
-	var b bytes.Buffer
-	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noarchive\"></head><body>")
-	b.WriteString("<noscript>Vui lòng bật JavaScript để xem trang này. / Please enable JavaScript.</noscript><script>")
+// dynamicBufLen is an upper bound of a loader's size around a payload of
+// n bytes: the base64 text plus the fixed JavaScript (< 1 KB).
+func dynamicBufLen(n int) int { return base64.StdEncoding.EncodedLen(n) + 1024 }
+
+const (
+	htmlHead = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noarchive\"></head><body>" +
+		"<noscript>Vui lòng bật JavaScript để xem trang này. / Please enable JavaScript.</noscript><script>"
+	htmlTail = "</script></body></html>"
+)
+
+func protectHTML(html []byte) []byte { return protectHTMLRand(html, dynamicRand()) }
+
+// protectHTMLRand builds the loader page with the randomness rnd (key and
+// identifiers, see dynRandLen).
+func protectHTMLRand(html, rnd []byte) []byte {
+	key, ids := rnd[:dynKeyLen], dynamicIdents(rnd)
+	fn := ids[0][:]
+	b := make([]byte, 0, dynamicBufLen(len(html)))
+	b = append(b, htmlHead...)
 	// Replace the document from a fresh task once the loader has finished
 	// parsing: document.open() then swaps the whole document (head included)
 	// and the original page's scripts, external ones too, run normally.
 	// Calling it from within DOMContentLoaded truncates the written document
 	// at its first external script in Chromium, hence the setTimeout.
-	b.WriteString("(function(){function " + fn + "(){var h=" + decoderJS(payload, key) + ";document.open();document.write(h);document.close();}")
-	b.WriteString("function g(){setTimeout(" + fn + ",0)}")
-	b.WriteString("if(document.readyState===\"loading\"){document.addEventListener(\"DOMContentLoaded\",g)}else{g()}})();")
-	b.WriteString("</script></body></html>")
-	return b.Bytes()
+	b = append(b, "(function(){function "...)
+	b = append(b, fn...)
+	b = append(b, "(){var h="...)
+	b = appendDecoder(b, html, key, ids[1:])
+	b = append(b, ";document.open();document.write(h);document.close();}function g(){setTimeout("...)
+	b = append(b, fn...)
+	b = append(b, ",0)}if(document.readyState===\"loading\"){document.addEventListener(\"DOMContentLoaded\",g)}else{g()}})();"...)
+	return append(b, htmlTail...)
 }
 
 // ES modules are loaded differently (deferred, own scope); leave them alone.
@@ -111,10 +198,26 @@ func protectJS(js []byte) ([]byte, bool) {
 	if jsModuleRe.Match(js) {
 		return nil, false
 	}
-	payload, key := dynamicEncode(js)
-	s := ident()
-	return []byte("(function(){var " + s + "=document.createElement(\"script\");" + s + ".text=" + decoderJS(payload, key) +
-		";(document.head||document.documentElement).appendChild(" + s + ");" + s + ".parentNode.removeChild(" + s + ");})();"), true
+	return protectJSRand(js, dynamicRand()), true
+}
+
+func protectJSRand(js, rnd []byte) []byte {
+	key, ids := rnd[:dynKeyLen], dynamicIdents(rnd)
+	s := ids[0][:]
+	b := make([]byte, 0, dynamicBufLen(len(js)))
+	b = append(b, "(function(){var "...)
+	b = append(b, s...)
+	b = append(b, "=document.createElement(\"script\");"...)
+	b = append(b, s...)
+	b = append(b, ".text="...)
+	b = appendDecoder(b, js, key, ids[1:])
+	b = append(b, ";(document.head||document.documentElement).appendChild("...)
+	b = append(b, s...)
+	b = append(b, ");"...)
+	b = append(b, s...)
+	b = append(b, ".parentNode.removeChild("...)
+	b = append(b, s...)
+	return append(b, ");})();"...)
 }
 
 func pathMatches(path string, prefixes []string) bool {
@@ -172,18 +275,60 @@ type multiCloser struct {
 	io.Closer
 }
 
+// dynBufs recycles the buffers upstream bodies are read into: the body is
+// only needed until it has been encoded.
+var dynBufs sync.Pool // *[]byte
+
+const dynBufKeep = 1 << 20 // larger buffers are left to the GC
+
+// readDynamicBody reads at most limit bytes of r into a pooled buffer sized
+// from Content-Length when it is known.
+func readDynamicBody(r io.Reader, size int64, limit int) (*[]byte, error) {
+	bp, _ := dynBufs.Get().(*[]byte)
+	if bp == nil {
+		bp = new([]byte)
+	}
+	buf := (*bp)[:0]
+	if want := int(min(max(size, 32<<10), int64(limit))) + 1; cap(buf) < want {
+		buf = make([]byte, 0, want) // +1: see EOF without growing
+	}
+	for len(buf) < limit {
+		if len(buf) == cap(buf) {
+			buf = slices.Grow(buf, min(len(buf), limit-len(buf)))
+		}
+		n, err := r.Read(buf[len(buf):min(cap(buf), limit)])
+		buf = buf[:len(buf)+n]
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	*bp = buf
+	return bp, nil
+}
+
+func putDynamicBuf(bp *[]byte) {
+	if cap(*bp) <= dynBufKeep {
+		*bp = (*bp)[:0]
+		dynBufs.Put(bp)
+	}
+}
+
 // applyDynamic rewrites resp in place when dynamic protection applies.
 func applyDynamic(d model.DynamicProtection, resp *http.Response) error {
 	kind := dynamicKind(d, resp)
 	if kind == "" {
 		return nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDynamicBody+1))
+	bp, err := readDynamicBody(resp.Body, resp.ContentLength, maxDynamicBody+1)
 	if err != nil {
 		return err
 	}
+	body := *bp
 	if len(body) > maxDynamicBody {
-		// Too large: pass through untouched.
+		// Too large: pass through untouched (the buffer goes with it).
 		resp.Body = multiCloser{io.MultiReader(bytes.NewReader(body), resp.Body), resp.Body}
 		return nil
 	}
@@ -192,9 +337,12 @@ func applyDynamic(d model.DynamicProtection, resp *http.Response) error {
 	switch kind {
 	case "html":
 		out = protectHTML(body)
+		putDynamicBuf(bp)
 	case "js":
 		var ok bool
-		if out, ok = protectJS(body); !ok {
+		if out, ok = protectJS(body); ok {
+			putDynamicBuf(bp)
+		} else {
 			out = body
 			kind = ""
 		}

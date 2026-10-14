@@ -16,6 +16,9 @@ type scenario struct {
 	// Next builds request n; hosts are the server names of the sites.
 	Next   func(n uint64, hosts []string) request
 	Expect int
+	// AlsoOK lists other accepted statuses, for scenarios whose answer
+	// depends on the engine version (e.g. 4b before argument limits).
+	AlsoOK []int
 	// CheckDynamic verifies that responses are rewritten by dynamic protection.
 	CheckDynamic bool
 }
@@ -40,6 +43,8 @@ const (
 	benignQuery = pathSmall + "?category=sach-lap-trinh&page=2&sort=price_asc&q=golang+concurrency&utm_source=newsletter"
 	// Classic UNION-based SQL injection; CRS 942xxx rules score it far above
 	// the default inbound threshold of 5.
+	// staticPath has a static file extension and no query (static_fast_path).
+	staticPath  = "/assets/css/app.css"
 	attackQuery = pathSmall + "?id=1%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--%20-"
 )
 
@@ -87,8 +92,23 @@ func getReq(path string) func(n uint64, hosts []string) request {
 	}
 }
 
+// flatJSON returns a flat JSON object with n string fields (~22 B each).
+func flatJSON(n int) []byte {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"field_%04d":"gia tri %04d"`, i, i)
+	}
+	b.WriteByte('}')
+	return []byte(b.String())
+}
+
 func scenarios() []scenario {
 	post := orderJSON(2048)
+	wide := flatJSON(1000)
 	jh := jsonHeader()
 	return []scenario{
 		{ID: "1", Name: "Upstream trực tiếp (không WAF)", Direct: true, Next: getReq(benignQuery), Expect: 200},
@@ -98,11 +118,19 @@ func scenarios() []scenario {
 			Next: func(n uint64, hosts []string) request {
 				return request{method: http.MethodPost, path: "/api/orders", host: hosts[0], header: jh, body: post}
 			}, Expect: 200},
+		// 1 000 keys: above the engine's argument limit (255) it is refused
+		// with 400 before the CRS runs; older engines inspected it fully.
+		{ID: "4b", Name: "block PL1, POST JSON 1 000 khoá (~28 KB)", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1}),
+			Next: func(n uint64, hosts []string) request {
+				return request{method: http.MethodPost, path: "/api/orders", host: hosts[0], header: jh, body: wide}
+			}, Expect: http.StatusBadRequest, AlsoOK: []int{http.StatusOK}},
 		{ID: "5", Name: "block PL2, GET có query", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 2}), Next: getReq(benignQuery), Expect: 200},
 		{ID: "6", Name: "block PL1, tấn công SQLi (403)", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1}), Next: getReq(attackQuery), Expect: 403},
 		{ID: "7", Name: "block PL1 + dynamic html, trang 50 KB", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1, "dynamic_protection": map[string]any{"html": true}}),
 			Next: getReq(pathLarge), Expect: 200, CheckDynamic: true},
 		{ID: "7a", Name: "block PL1, trang 50 KB (đối chứng của 7)", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1}), Next: getReq(pathLarge), Expect: 200},
+		{ID: "9", Name: "block PL1, tài nguyên tĩnh .css", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1}), Next: getReq(staticPath), Expect: 200},
+		{ID: "9a", Name: "như 9 với static_fast_path", Sites: oneSite("bench.local", map[string]any{"mode": "block", "paranoia": 1, "static_fast_path": true}), Next: getReq(staticPath), Expect: 200},
 		{ID: "8", Name: "block PL1, N site (định tuyến)", Sites: manySites, Next: getReq(benignQuery), Expect: 200},
 	}
 }

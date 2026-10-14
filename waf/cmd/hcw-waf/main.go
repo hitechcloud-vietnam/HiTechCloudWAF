@@ -131,6 +131,7 @@ func run(path string, log *slog.Logger) error {
 		Access: access,
 		GeoIP:  geoIface,
 		Bind:   cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets, CacheMB: cfg.CacheMB,
+		MaxInspections: cfg.WAFConcurrency, ArgsBodyLimit: cfg.BodyArgsLimitKB * 1024,
 		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
 	if cfg.ACME.Enabled {
