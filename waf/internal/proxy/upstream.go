@@ -1,0 +1,117 @@
+package proxy
+
+import (
+	"crypto/tls"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+)
+
+type ctxKey struct{}
+
+type ctxVal struct {
+	ip  net.IP
+	tls bool
+}
+
+type readCloser struct {
+	io.Reader
+	c io.Closer
+}
+
+func (r readCloser) Close() error { return r.c.Close() }
+
+func ioMulti(a, b io.Reader) io.Reader { return io.MultiReader(a, b) }
+
+// hop-by-hop and spoofable headers replaced before proxying
+var forwardHeaders = []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Real-IP", "Forwarded"}
+
+const downFor = 10 * time.Second
+
+func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
+	up := &upstream{url: u}
+	tr := &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:          512,
+		MaxIdleConnsPerHost:   128,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ForceAttemptHTTP2:     true,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: s.site.UpstreamInsecure}, //nolint:gosec // per-site opt-in
+	}
+	hostOverride := s.site.UpstreamHost
+	up.proxy = &httputil.ReverseProxy{
+		Transport:     tr,
+		FlushInterval: -1, // stream responses (SSE, long polling)
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(u)
+			pr.Out.Host = pr.In.Host
+			if hostOverride != "" {
+				pr.Out.Host = hostOverride
+			}
+			v, _ := pr.In.Context().Value(ctxKey{}).(ctxVal)
+			for _, h := range forwardHeaders {
+				pr.Out.Header.Del(h)
+			}
+			if v.ip != nil {
+				prior := ""
+				// Keep the chain only when it came through a trusted proxy.
+				if peer := remoteIP(pr.In.RemoteAddr); peer != nil && contains(e.opt.TrustedProxies, peer) {
+					prior = pr.In.Header.Get("X-Forwarded-For")
+				}
+				xff := v.ip.String()
+				if prior != "" {
+					xff = prior + ", " + remoteIP(pr.In.RemoteAddr).String()
+				}
+				pr.Out.Header.Set("X-Forwarded-For", xff)
+				pr.Out.Header.Set("X-Real-IP", v.ip.String())
+			}
+			proto := "http"
+			if v.tls {
+				proto = "https"
+			}
+			pr.Out.Header.Set("X-Forwarded-Proto", proto)
+			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			up.downUntil.Store(time.Now().Add(downFor).UnixNano())
+			e.opt.Log.Warn("upstream error", "site", s.site.ID, "upstream", u.String(), "err", err)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, "502 Bad Gateway – upstream unavailable\n")
+		},
+	}
+	return up
+}
+
+func remoteIP(addr string) net.IP {
+	h, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		h = addr
+	}
+	return net.ParseIP(strings.Trim(h, "[]"))
+}
+
+// pick returns the next healthy upstream round-robin; when all are marked
+// down it still tries one rather than failing every request.
+func (s *siteRT) pick() *upstream {
+	n := len(s.upstreams)
+	if n == 0 {
+		return nil
+	}
+	start := int(s.rr.Add(1))
+	now := time.Now().UnixNano()
+	for i := 0; i < n; i++ {
+		u := s.upstreams[(start+i)%n]
+		if u.downUntil.Load() < now {
+			return u
+		}
+	}
+	return s.upstreams[start%n]
+}

@@ -1,0 +1,148 @@
+// Command hcw-waf is the HiTechCloud WAF engine: a reverse proxy with OWASP
+// CRS inspection, IP ACL and rate limiting, managed through an HTTP API.
+//
+//	hcw-waf -config /etc/hcw-waf/waf.yaml
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/mgmt"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
+)
+
+var version = "dev"
+
+func main() {
+	path := flag.String("config", "/etc/hcw-waf/waf.yaml", "configuration file")
+	debug := flag.Bool("debug", false, "debug logging")
+	showVersion := flag.Bool("version", false, "print version")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	if err := run(*path, log); err != nil {
+		log.Error("exited", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(path string, log *slog.Logger) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(cfg.DataDir, "config.json"))
+	if err != nil {
+		return err
+	}
+	evlog, err := events.New(cfg.EventsKept, cfg.EventsFile)
+	if err != nil {
+		return err
+	}
+	defer evlog.Close()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	eng := proxy.New(ctx, proxy.Options{
+		Bind: cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
+		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Log: log, Events: evlog,
+	})
+	start := time.Now()
+	if err := eng.Apply(st.Sites(), st.Certs()); err != nil {
+		// Keep running so the configuration can be fixed through the API.
+		log.Error("initial configuration not fully applied", "err", err)
+	}
+	log.Info("engine ready", "version", version, "sites", len(st.Sites()), "took", time.Since(start).String())
+
+	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log}
+	crt, key := cfg.API.TLSCert, cfg.API.TLSKey
+	if crt == "" {
+		crt, key = filepath.Join(cfg.DataDir, "api.crt"), filepath.Join(cfg.DataDir, "api.key")
+		if err := ensureSelfSigned(crt, key); err != nil {
+			return fmt.Errorf("api certificate: %w", err)
+		}
+	}
+	srv := &http.Server{
+		Addr: cfg.API.Listen, Handler: api.Handler(),
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		sh, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sh)
+		eng.Shutdown(sh)
+	}()
+	log.Info("management API listening", "addr", cfg.API.Listen)
+	if err := srv.ListenAndServeTLS(crt, key); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// ensureSelfSigned creates a certificate for the local management API.
+func ensureSelfSigned(crtPath, keyPath string) error {
+	if _, err := os.Stat(crtPath); err == nil {
+		return nil
+	}
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	host, _ := os.Hostname()
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+	tpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{Organization: []string{"HiTechCloud WAF"}, CommonName: "hcw-waf api"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost", host},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &k.PublicKey, k)
+	if err != nil {
+		return err
+	}
+	kb, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(crtPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+}

@@ -1,0 +1,32 @@
+# HiTechCloud WAF node: engine + cluster agent.
+# The agent is optional for a single node (remove the service).
+services:
+  hcw-waf:
+    image: ${HCW_WAF_IMAGE:-ghcr.io/hitechcloud-vietnam/hitechcloud-waf:latest}
+    build: ..
+    container_name: hcw-waf
+    restart: always
+    network_mode: host            # serves site ports directly, keeps client IPs
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      nofile: 131072
+    volumes:
+      - ${HCW_WAF_ETC:-/etc/hcw-waf}:/etc/hcw-waf:ro
+      - ${HCW_WAF_DATA:-/var/lib/hcw-waf}:/var/lib/hcw-waf
+  hcw-agent:
+    image: ${HCW_CLUSTER_IMAGE:-ghcr.io/hitechcloud-vietnam/hitechcloud-waf-cluster:latest}
+    build: ../../cluster
+    container_name: hcw-agent
+    command: ["agent", "-config", "/etc/hcw/agent.yaml"]
+    restart: always
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [hcw-waf]
+    volumes:
+      - ${HCW_ETC:-/etc/hcw}:/etc/hcw:ro
+      - ${HCW_STATE:-/var/lib/hcw}:/var/lib/hcw

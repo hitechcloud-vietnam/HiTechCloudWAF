@@ -14,14 +14,24 @@ Phát triển bởi Pho Tue SoftWare Solutions JSC / HiTechCloud-VN.
 
 ## Tính năng
 
-**Bảo vệ ứng dụng web** (WAF engine):
+**HiTechCloud WAF Engine** (`waf/`, mã nguồn mở, độc lập): reverse proxy +
+OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 
-- Chặn tấn công web: SQL injection, XSS, code/OS command injection, CRLF, XXE,
-  SSRF, path traversal, backdoor…
-- Giới hạn tốc độ truy cập (chống brute force, HTTP flood).
-- Anti-bot challenge, xác thực truy cập (auth challenge).
-- Bảo vệ động: mã hóa HTML/JS.
-- ACL theo IP.
+Đã có trong engine HiTechCloud:
+
+- Chặn tấn công web theo OWASP CRS: SQL injection, XSS, RCE/command injection,
+  LFI/RFI, path traversal, protocol attack, scanner… (đã kiểm thử ở cả query
+  lẫn body JSON/form).
+- Chế độ block / monitor / off, paranoia 1–4, tắt rule chặn nhầm theo từng site.
+- Rate limit theo IP (chống brute force, HTTP flood).
+- ACL IP allow/deny (CIDR).
+- TLS nhiều chứng chỉ theo SNI, redirect HTTPS.
+- Reverse proxy nhiều upstream có failover.
+- Trang chặn whitelabel kèm Event ID.
+- Log sự kiện tấn công và API quản trị.
+
+Lộ trình (chưa có trong engine HiTechCloud): anti-bot challenge, auth
+challenge, mã hóa HTML/JS động, console web quản trị.
 
 **Cluster & DNS** (`cluster/`, viết mới):
 
@@ -43,7 +53,8 @@ Phát triển bởi Pho Tue SoftWare Solutions JSC / HiTechCloud-VN.
 
 | Thư mục | Nội dung |
 |---|---|
-| `compose.yaml`, `scripts/manage.py` | Stack WAF engine cho một node |
+| `waf/` | **HiTechCloud WAF Engine** (Go, Coraza + CRS) — xem [docs/engine.vi.md](docs/engine.vi.md) |
+| `compose.yaml`, `scripts/manage.py` | Stack engine upstream (image Chaitin, cần thỏa thuận OEM) |
 | `cluster/` | Controller, agent và DNS cho cluster (Go) — xem [docs/cluster.vi.md](docs/cluster.vi.md) |
 | `branding/console/` | Overlay whitelabel cho image console |
 | `mcp_server/` | HiTechCloud WAF MCP Server |
@@ -52,8 +63,9 @@ Phát triển bởi Pho Tue SoftWare Solutions JSC / HiTechCloud-VN.
 
 ## Bắt đầu
 
-1. Cài stack WAF engine trên từng node (`compose.yaml`).
-2. Dựng cluster theo [docs/cluster.vi.md](docs/cluster.vi.md).
+1. Mỗi node: `waf/deploy/compose.yaml` (engine HiTechCloud + agent).
+2. Control plane & DNS: [docs/cluster.vi.md](docs/cluster.vi.md), dùng
+   `cluster/examples/controller-hcw-engine.yaml`.
 
 ## Giấy phép
 

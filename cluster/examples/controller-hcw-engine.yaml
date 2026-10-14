@@ -1,0 +1,32 @@
+# Controller for clusters running the HiTechCloud WAF engine (waf/).
+controller:
+  listen: ":7443"
+  tls_cert: /etc/hcw/tls/controller.crt
+  tls_key: /etc/hcw/tls/controller.key
+  state_file: /var/lib/hcw/controller-state.json
+  admin_token_file: /etc/hcw/secrets/admin.token
+  node_token_file: /etc/hcw/secrets/node.token
+  dns_token_file: /etc/hcw/secrets/dns.token
+  probe_insecure: true
+  primary:
+    base_url: https://127.0.0.1:9443
+    token_file: /etc/hcw/secrets/primary-engine.token
+    token_header: X-HCW-API-TOKEN
+    insecure_skip_verify: true
+    resources:
+      - name: cert
+        path: /api/open/cert
+        key_fields: [domains]
+        ignore_fields: [created_at, updated_at, issuer, not_after]
+        prune: true
+      - name: site
+        path: /api/open/site
+        key_fields: [server_names]
+        ignore_fields: [created_at, updated_at]
+        refs: {cert_id: cert}
+        prune: true
+  sync_interval: 15s
+  brand:
+    name: HiTechCloud WAF
+    primary_color: "#1D4ED8"
+    support_url: https://hitechcloud.vn

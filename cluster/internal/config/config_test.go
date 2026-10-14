@@ -10,7 +10,7 @@ import (
 // The shipped examples must stay valid: unknown keys are rejected.
 func TestExamplesParse(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"controller", "agent", "dns"} {
+	for _, name := range []string{"controller", "agent", "dns", "controller-hcw-engine"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".yaml"))
 		if err != nil {
 			t.Fatal(err)
@@ -32,7 +32,7 @@ func TestExamplesParse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if name == "controller" && (len(f.Controller.Primary.Resources) != 2 || f.Controller.Primary.Resources[1].Refs["cert_id"] != "cert") {
+		if strings.HasPrefix(name, "controller") && (len(f.Controller.Primary.Resources) != 2 || f.Controller.Primary.Resources[1].Refs["cert_id"] != "cert") {
 			t.Fatalf("controller resources = %+v", f.Controller.Primary.Resources)
 		}
 	}
