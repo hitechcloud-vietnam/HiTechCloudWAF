@@ -31,6 +31,10 @@ jobs:
             (cd waf && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o ../dist/hcw-waf-linux-$arch ./cmd/hcw-waf)
             (cd cluster && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o ../dist/hcw-linux-$arch ./cmd/hcw)
           done
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=.exe
+            (cd ctl && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X github.com/hitechcloud-vietnam/HiTechCloudWAF/ctl/internal/cli.Version=${VERSION}" -o ../dist/hcwctl-$os-$arch$ext ./cmd/hcwctl)
+          done
           cp scripts/install.sh dist/
           (cd dist && sha256sum * > SHA256SUMS)
       - name: Publish release

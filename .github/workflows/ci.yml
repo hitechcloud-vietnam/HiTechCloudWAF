@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [waf, cluster, mcp_server]
+        module: [waf, cluster, ctl, bench, mcp_server]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [waf, cluster, mcp_server]
+        module: [waf, cluster, ctl, bench, mcp_server]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
