@@ -31,6 +31,7 @@ import (
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/accesslog"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/audit"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
@@ -164,6 +165,10 @@ func run(path string, log *slog.Logger) error {
 	if alertSender != nil {
 		api.Alerts = alertSender
 	}
+	if api.Audit, err = audit.New(filepath.Join(cfg.DataDir, "audit.log"), 2000); err != nil {
+		return fmt.Errorf("audit: %w", err)
+	}
+	defer api.Audit.Close()
 	if api.Users, err = users.Open(filepath.Join(cfg.DataDir, "users.json")); err != nil {
 		return fmt.Errorf("users: %w", err)
 	}

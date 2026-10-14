@@ -262,3 +262,54 @@ func (s *Store) DeleteCerts(ids []int) error {
 	}
 	return s.commit()
 }
+
+// Backup is a full export of the node configuration.
+type Backup struct {
+	Version    int          `json:"version"`
+	ExportedAt time.Time    `json:"exported_at"`
+	Sites      []model.Site `json:"sites"`
+	Certs      []model.Cert `json:"certs"`
+}
+
+// Export returns the whole configuration (including private keys).
+func (s *Store) Export() Backup {
+	return Backup{Version: 1, ExportedAt: time.Now().UTC(), Sites: s.Sites(), Certs: s.Certs()}
+}
+
+// Replace validates b completely and then swaps it in; on any error the
+// current configuration is kept. IDs from the backup are preserved.
+func (s *Store) Replace(b Backup) error {
+	if b.Version != 1 {
+		return fmt.Errorf("unsupported backup version %d", b.Version)
+	}
+	next := state{Sites: map[int]*model.Site{}, Certs: map[int]*model.Cert{}}
+	for i := range b.Certs {
+		c := b.Certs[i]
+		if c.ID <= 0 || next.Certs[c.ID] != nil {
+			return fmt.Errorf("cert #%d: missing or duplicate id", i)
+		}
+		if err := c.Normalize(); err != nil {
+			return fmt.Errorf("cert %d: %w", c.ID, err)
+		}
+		next.Certs[c.ID] = &c
+		next.NextID = max(next.NextID, c.ID)
+	}
+	tmp := &Store{st: next}
+	for i := range b.Sites {
+		site := b.Sites[i]
+		if site.ID <= 0 || next.Sites[site.ID] != nil || next.Certs[site.ID] != nil {
+			return fmt.Errorf("site #%d: missing or duplicate id", i)
+		}
+		if err := site.Normalize(); err != nil {
+			return fmt.Errorf("site %d: %w", site.ID, err)
+		}
+		if err := tmp.checkConflictsLocked(&site); err != nil {
+			return fmt.Errorf("site %d: %w", site.ID, err)
+		}
+		next.Sites[site.ID] = &site
+		next.NextID = max(next.NextID, site.ID)
+	}
+	s.mu.Lock()
+	s.st = next
+	return s.commit()
+}

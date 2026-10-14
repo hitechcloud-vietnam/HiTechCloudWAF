@@ -109,7 +109,7 @@
       a.classList.toggle("active", a.getAttribute("data-nav") === parts[0]);
     });
     var v = clear($("view"));
-    var views = { dashboard: dashboard, sites: sites, events: eventsView, certs: certs, users: usersView, account: accountView };
+    var views = { dashboard: dashboard, sites: sites, events: eventsView, certs: certs, users: usersView, account: accountView, system: systemView };
     (views[parts[0]] || dashboard)(v, parts.slice(1));
   }
   window.addEventListener("hashchange", function () { if (signedIn()) route(); });
@@ -497,6 +497,47 @@
       }).catch(function (e) { toast(e.message, true); });
     }
     load();
+  }
+
+  // ---------- system: backup, restore, audit ----------
+  function systemView(v) {
+    v.appendChild(el("h1", { text: "Hệ thống" }));
+    var restoreInput = el("input", { type: "file", accept: ".json,application/json" });
+    v.appendChild(el("fieldset", {}, [el("legend", { text: "Sao lưu & khôi phục cấu hình" }),
+      el("p", { class: "muted", text: "File sao lưu chứa toàn bộ ứng dụng và chứng chỉ (kèm private key) – hãy lưu trữ an toàn." }),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn primary", text: "Tải file sao lưu", onclick: function () {
+          api("GET", "/api/open/backup").then(function (d) {
+            var blob = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" });
+            var a = el("a", { href: URL.createObjectURL(blob), download: "hcw-waf-backup-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".json" });
+            document.body.appendChild(a); a.click(); a.remove(); toast("Đã tải file sao lưu");
+          }, function (x) { toast(x.message, true); });
+        } }),
+        el("span", { class: "spacer" }), restoreInput,
+        el("button", { class: "btn danger", text: "Khôi phục từ file", onclick: function () {
+          var f = restoreInput.files[0]; if (!f) { toast("Chọn file sao lưu trước", true); return; }
+          if (!confirm("Thay toàn bộ cấu hình hiện tại bằng nội dung file " + f.name + "?")) return;
+          var rd = new FileReader();
+          rd.onload = function () {
+            var data; try { data = JSON.parse(rd.result); } catch (e) { toast("File không phải JSON hợp lệ", true); return; }
+            api("POST", "/api/open/restore", data).then(function (r) { toast("Đã khôi phục " + r.sites + " ứng dụng, " + r.certs + " chứng chỉ"); route(); }, function (x) { toast(x.message, true); });
+          };
+          rd.readAsText(f);
+        } })])]));
+    v.appendChild(el("h2", { text: "Nhật ký thao tác" }));
+    var box = el("div"); v.appendChild(box);
+    api("GET", "/api/open/audit?limit=300").then(function (d) {
+      var tb = el("tbody");
+      (d.data || []).forEach(function (e) {
+        var detail = e.detail ? JSON.stringify(e.detail) : "";
+        tb.appendChild(el("tr", {}, [el("td", { class: "nowrap", text: fmtTime(e.time) }), el("td", { text: e.user }), el("td", { class: "mono nowrap", text: e.ip }),
+          el("td", { class: "mono nowrap", text: e.action }),
+          el("td", {}, [el("span", { class: "pill " + (e.status < 400 ? "ok" : "bad"), text: String(e.status) })]),
+          el("td", { class: "mono", text: detail.length > 160 ? detail.slice(0, 160) + "…" : detail })]));
+      });
+      if (!(d.data || []).length) tb.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "muted", text: "Chưa có thao tác nào." })]));
+      box.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Thời gian", "Người dùng", "IP", "Thao tác", "Kết quả", "Chi tiết"].map(function (h) { return el("th", { text: h }); }))]), tb])]));
+    }, function (x) { toast(x.message, true); });
   }
 
   // ---------- my account ----------

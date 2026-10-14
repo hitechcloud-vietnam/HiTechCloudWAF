@@ -253,6 +253,19 @@ Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
 
 ![Bật 2FA](images/console-2fa.png)
 
+**Trang Hệ thống** (chỉ admin):
+
+- **Sao lưu:** tải toàn bộ ứng dụng và chứng chỉ (kèm private key) ra một file
+  JSON.
+- **Khôi phục:** thay toàn bộ cấu hình bằng file sao lưu. Mọi site và chứng chỉ
+  trong file được kiểm tra hợp lệ trước; chỉ cần một mục lỗi là cả file bị từ
+  chối và cấu hình đang chạy được giữ nguyên. API: `GET /api/open/backup`,
+  `POST /api/open/restore`.
+- **Nhật ký thao tác (audit log):** mọi thay đổi qua API/console và mọi lần
+  đăng nhập (thành công hay thất bại) đều được ghi lại: ai, IP nào, thao tác
+  gì, kết quả ra sao, kèm nội dung request. Mật khẩu, khoá, token và mã 2FA
+  được che thành `***`. Lưu ở `data_dir/audit.log`; API `GET /api/open/audit`.
+
 Chức năng:
 
 - **Tổng quan:** số request và số lần chặn trong 60 phút, biểu đồ theo phút,

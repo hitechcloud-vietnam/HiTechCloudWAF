@@ -4,11 +4,13 @@
 package mgmt
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/audit"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
@@ -41,6 +44,8 @@ type API struct {
 	Console http.Handler
 	// Allow restricts the API and console to these networks (empty = any).
 	Allow []*net.IPNet
+	// Audit records administrative actions (optional).
+	Audit *audit.Log
 	// Users enables console accounts; nil means API token only.
 	Users *users.Store
 	guard loginGuard
@@ -166,6 +171,43 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
 	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
 	mux.HandleFunc("GET /api/open/metrics", a.metrics)
+	mux.HandleFunc("GET /api/open/audit", func(w http.ResponseWriter, r *http.Request) {
+		if !adminOnly(w, r) {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 || limit > 2000 {
+			limit = 200
+		}
+		entries := []audit.Entry{}
+		if a.Audit != nil {
+			entries = a.Audit.Latest(limit)
+		}
+		ok(w, list[audit.Entry]{Data: entries, Total: len(entries)})
+	})
+	mux.HandleFunc("GET /api/open/backup", func(w http.ResponseWriter, r *http.Request) {
+		if !adminOnly(w, r) {
+			return
+		}
+		if a.Audit != nil {
+			a.Audit.Add(audit.Entry{Time: time.Now().UTC(), User: callerOf(r).name, IP: clientHost(r), Action: "GET /api/open/backup", Status: 200})
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="hcw-waf-backup-`+time.Now().UTC().Format("20060102-150405")+`.json"`)
+		ok(w, a.Store.Export())
+	})
+	mux.HandleFunc("POST /api/open/restore", a.write(func(r *http.Request) (any, error) {
+		if !callerOf(r).admin() {
+			return nil, errors.New("administrators only")
+		}
+		var b store.Backup
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if err := a.Store.Replace(b); err != nil {
+			return nil, err
+		}
+		return map[string]int{"sites": len(b.Sites), "certs": len(b.Certs)}, nil
+	}))
 	mux.HandleFunc("POST /api/open/alerts/test", func(w http.ResponseWriter, r *http.Request) {
 		if a.Alerts == nil {
 			fail(w, http.StatusConflict, "not_configured", errors.New("no alert channel configured (alerts.telegram or alerts.webhooks in waf.yaml)"))
@@ -208,7 +250,17 @@ func (a *API) Handler() http.Handler {
 			fail(w, http.StatusForbidden, "forbidden", errors.New("your role is read-only"))
 			return
 		}
-		mux.ServeHTTP(w, withCaller(r, p))
+		if a.Audit == nil || r.Method == http.MethodGet {
+			mux.ServeHTTP(w, withCaller(r, p))
+			return
+		}
+		// Record every change: who, from where, what, and the outcome.
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		rec := &codeRecorder{ResponseWriter: w, code: http.StatusOK}
+		mux.ServeHTTP(rec, withCaller(r, p))
+		a.Audit.Add(audit.Entry{Time: time.Now().UTC(), User: p.name, IP: clientHost(r),
+			Action: r.Method + " " + r.URL.Path, Status: rec.code, Detail: audit.Redact(body)})
 	})
 }
 
@@ -246,6 +298,24 @@ func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	fmt.Fprintf(w, "# HELP hcw_sites Configured sites.\n# TYPE hcw_sites gauge\nhcw_sites %d\n", len(names))
 	fmt.Fprintf(w, "# HELP hcw_uptime_seconds Seconds since start.\n# TYPE hcw_uptime_seconds gauge\nhcw_uptime_seconds %d\n", int(time.Since(a.Started).Seconds()))
+}
+
+type codeRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (c *codeRecorder) WriteHeader(code int) {
+	c.code = code
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func adminOnly(w http.ResponseWriter, r *http.Request) bool {
+	if !callerOf(r).admin() {
+		fail(w, http.StatusForbidden, "forbidden", errors.New("administrators only"))
+		return false
+	}
+	return true
 }
 
 func (a *API) allowed(remote string) bool {

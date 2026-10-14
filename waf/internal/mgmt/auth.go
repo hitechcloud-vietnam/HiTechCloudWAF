@@ -12,6 +12,7 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/audit"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/users"
 )
 
@@ -123,11 +124,17 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		a.guard.failed(ip, time.Now())
+		if a.Audit != nil {
+			a.Audit.Add(audit.Entry{Time: time.Now().UTC(), User: in.Username, IP: ip, Action: "login", Status: http.StatusUnauthorized})
+		}
 		a.Log.Warn("console login failed", "user", in.Username, "ip", ip, "err", err)
 		fail(w, http.StatusUnauthorized, "unauthorized", err)
 		return
 	}
 	a.Log.Info("console login", "user", sess.Username, "role", sess.Role, "ip", ip)
+	if a.Audit != nil {
+		a.Audit.Add(audit.Entry{Time: time.Now().UTC(), User: sess.Username, IP: ip, Action: "login", Status: http.StatusOK})
+	}
 	ok(w, map[string]any{"token": tok, "username": sess.Username, "role": sess.Role, "expires": sess.Expires})
 }
 
