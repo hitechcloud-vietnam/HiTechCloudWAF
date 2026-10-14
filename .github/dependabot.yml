@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/waf", "/cluster", "/mcp_server"]
+    schedule: {interval: weekly}
+    groups:
+      go-deps: {patterns: ["*"]}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
