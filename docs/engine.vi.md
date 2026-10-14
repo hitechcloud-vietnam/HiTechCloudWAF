@@ -17,7 +17,9 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
-          ├─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
+          ├─ Reverse proxy → upstream (round-robin / weighted / least_conn /
+          │   ip_hash / random, sticky session; upstream lỗi bị loại 10s)
+          ├─ Sửa header request/response theo cấu hình site
           └─ Bảo vệ động: mã hoá HTML/JS trong response (tuỳ chọn)
 ```
 
@@ -35,7 +37,11 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Danh sách IP hoặc CIDR |
 | `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
-| `upstreams` | `http(s)://host:port`, có thể nhiều upstream |
+| `upstreams` | `http(s)://host:port`, có thể nhiều upstream; thêm ` weight=N` (1–100) để đặt trọng số |
+| `lb` | Thuật toán cân bằng tải: `round_robin` (mặc định), `weighted`, `least_conn`, `ip_hash`, `random` |
+| `sticky`, `sticky_cookie`, `sticky_ttl_sec` | Giữ khách ở một upstream bằng cookie (mặc định `hcw_srv`, hết hạn khi đóng trình duyệt) |
+| `request_headers`, `response_headers` | Rule `set` / `add` / `remove` header gửi lên upstream và trả về cho khách |
+| `hide_server_headers` | Xoá `Server`, `X-Powered-By`, `X-AspNet-Version`, `X-AspNetMvc-Version` khỏi response của upstream |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
 | `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
@@ -206,6 +212,68 @@ Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
   `GET /api/open/upstreams`.
 - WebSocket và các giao thức nâng cấp (Upgrade) đi qua WAF bình thường.
 
+### Cân bằng tải và sticky session
+
+```json
+"upstreams": ["http://10.0.0.10:8080 weight=3", "http://10.0.0.11:8080", "http://10.0.0.12:8080"],
+"lb": "least_conn",
+"sticky": true,
+"sticky_cookie": "hcw_srv",
+"sticky_ttl_sec": 0
+```
+
+Mỗi upstream vẫn là một chuỗi URL như trước; muốn đặt trọng số thì thêm
+` weight=N` (1–100, mặc định 1). Cấu hình cũ chỉ có danh sách URL vẫn chạy
+như cũ (round-robin).
+
+| `lb` | Cách chọn upstream |
+|---|---|
+| `round_robin` | Lần lượt từng upstream, bỏ qua trọng số. Mặc định khi không upstream nào có `weight` |
+| `weighted` | Round-robin theo trọng số, xen kẽ đều (smooth weighted round-robin như nginx). Mặc định khi có `weight` |
+| `least_conn` | Upstream có ít request đang xử lý nhất so với trọng số (tính cả WebSocket đang mở) |
+| `ip_hash` | Consistent hashing theo IP khách (IPv6 theo dải /64). Khi một upstream lỗi hoặc bị xoá khỏi cấu hình, chỉ khách của upstream đó bị chuyển, khách khác giữ nguyên upstream |
+| `random` | Ngẫu nhiên theo trọng số |
+
+- Mọi thuật toán chỉ chọn trong nhóm upstream tốt nhất hiện có: trước hết là
+  upstream khỏe (qua `health_check`) và không lỗi trong 10 giây gần đây; nếu
+  không còn thì các upstream chưa bị health check loại; nếu tất cả đều lỗi vẫn
+  thử một upstream thay vì trả lỗi cho mọi request.
+- **Sticky session** (`sticky: true`): lần đầu engine chọn upstream theo
+  `lb` và trả cookie `sticky_cookie` (HttpOnly, SameSite=Lax, Secure khi
+  HTTPS). Giá trị cookie là mã HMAC của upstream, không lộ địa chỉ server gốc;
+  các node dùng chung `challenge_secret_file` nhận cookie của nhau. Nếu
+  upstream đã gắn bị lỗi, khách được chuyển sang upstream khác và nhận cookie
+  mới. `sticky_ttl_sec` = 0 nghĩa là cookie hết hạn khi đóng trình duyệt.
+
+### Sửa header (`request_headers`, `response_headers`)
+
+```json
+"request_headers": [
+  {"action": "set", "name": "X-Env", "value": "production"},
+  {"action": "remove", "name": "X-Debug"}
+],
+"response_headers": [
+  {"action": "set", "name": "X-Frame-Options", "value": "SAMEORIGIN"},
+  {"action": "add", "name": "Cache-Control", "value": "no-store"}
+],
+"hide_server_headers": true
+```
+
+- `set` thay mọi giá trị cũ, `add` thêm một giá trị, `remove` xoá header.
+  Rule chạy theo thứ tự, tối đa 50 rule mỗi chiều. Giá trị một dòng, tối đa
+  4096 byte.
+- Không được sửa: header hop-by-hop (`Connection`, `Keep-Alive`, `TE`,
+  `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`), `Host` (dùng
+  `upstream_host`), `Content-Length`, `Content-Encoding`. Với request còn cấm
+  `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP`,
+  `Forwarded` và `Expect` vì engine tự đặt các header này từ IP đã xác minh.
+- Header response chỉ áp dụng cho response từ upstream, không áp dụng cho
+  trang chặn hay trang challenge của WAF. `hsts` vẫn được thêm sau rule.
+- Trong console, nhập mỗi dòng một rule: `set Tên: giá trị`,
+  `add Tên: giá trị`, `remove Tên` (phần **Cân bằng tải & header**).
+
+Ví dụ đầy đủ: `waf/examples/site.json`.
+
 ### Access log
 
 ```yaml
@@ -358,5 +426,7 @@ thật.
 - rate limit, ACL, wildcard host;
 - `X-Forwarded-For` chỉ được tin khi đi qua proxy tin cậy;
 - failover upstream;
+- phân phối tải theo từng thuật toán (tỷ lệ trọng số, least_conn, ip_hash giữ
+  nguyên khách khi một upstream bị loại), sticky session và sửa header;
 - TLS nhiều chứng chỉ theo SNI;
 - CRUD API và lưu trữ.

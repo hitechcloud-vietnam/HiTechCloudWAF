@@ -280,6 +280,7 @@
           check("Mã hoá file JavaScript", "f-djs", (s.dynamic_protection || {}).js),
           el("div", { class: "hint", text: "Nội dung thay đổi mỗi request; bot không chạy JS chỉ thấy dữ liệu vô nghĩa. Trang có CSP riêng, ES module và file > 4 MB được giữ nguyên. Ảnh hưởng SEO: chỉ bật cho khu vực cần bảo vệ." })]),
         field("Chỉ áp dụng cho đường dẫn", el("textarea", { id: "f-dpaths", value: ((s.dynamic_protection || {}).paths || []).join("\n") }), "Để trống = toàn site. Ví dụ /san-pham/")])]),
+      trafficFieldset(s),
       el("fieldset", {}, [el("legend", { text: "Kiểm tra sức khỏe upstream" }), el("div", { class: "grid2" }, [
         field("Đường dẫn kiểm tra", el("input", { id: "f-hcp", value: (s.health_check || {}).path || "", placeholder: "/healthz" }), "Để trống = tắt. Upstream trả lỗi/≥400 nhiều lần liên tiếp sẽ bị loại khỏi vòng chia tải."),
         field("Chu kỳ (giây)", el("input", { id: "f-hci", type: "number", min: "1", value: (s.health_check || {}).interval_sec || 10 })),
@@ -313,6 +314,7 @@
         auto_tls: $("f-auto").checked, hsts: $("f-hsts").checked, custom_rules: g("f-rules")
       };
       if (g("f-authp")) body.auth.password = g("f-authp");
+      if (!collectTraffic(body)) return;
       if (body.rate_limit.requests === 0) body.rate_limit = { requests: 0, window_sec: 0, block_sec: 0 };
       api(isNew ? "POST" : "PUT", "/api/open/site", body).then(function (saved) {
         toast(isNew ? "Đã tạo ứng dụng" : "Đã lưu"); location.hash = "#/sites/" + saved.id; if (!isNew) route();
@@ -358,6 +360,46 @@
       if (r.path) out.push(r);
     });
     return out;
+  }
+
+  // ---------- load balancing & header rewriting ----------
+  var LB = [["", "Tự động (round-robin; theo trọng số nếu có weight)"], ["round_robin", "Round-robin (lần lượt)"], ["weighted", "Theo trọng số (weight)"], ["least_conn", "Ít kết nối nhất"], ["ip_hash", "Theo IP khách (consistent hash)"], ["random", "Ngẫu nhiên (theo trọng số)"]];
+  function headerLines(rules) {
+    return (rules || []).map(function (r) { return r.action + " " + r.name + (r.value ? ": " + r.value : ""); }).join("\n");
+  }
+  // One rule per line: "set Name: value", "add Name: value", "remove Name".
+  function parseHeaderLines(text, what) {
+    var out = [];
+    (text || "").split("\n").forEach(function (line, i) {
+      line = line.trim();
+      if (!line) return;
+      var m = /^(set|add|remove)\s+([^\s:]+)\s*(?::\s*(.*))?$/i.exec(line);
+      if (!m) throw new Error(what + ", dòng " + (i + 1) + ": dùng “set Tên: giá trị”, “add Tên: giá trị” hoặc “remove Tên”");
+      out.push({ action: m[1].toLowerCase(), name: m[2], value: (m[3] || "").trim() });
+    });
+    return out;
+  }
+  function trafficFieldset(s) {
+    return el("fieldset", {}, [el("legend", { text: "Cân bằng tải & header" }), el("div", { class: "grid2" }, [
+      field("Thuật toán cân bằng tải", select("f-lb", LB, s.lb || ""), "Trọng số: thêm “weight=N” (1–100) sau upstream, ví dụ http://10.0.0.1:8080 weight=3. Mọi thuật toán đều bỏ qua upstream lỗi."),
+      el("div", {}, [check("Sticky session (giữ khách ở một upstream bằng cookie)", "f-sticky", s.sticky),
+        field("Tên cookie", el("input", { id: "f-stc", value: s.sticky_cookie || "hcw_srv" })),
+        field("Hiệu lực cookie (giây)", el("input", { id: "f-stt", type: "number", min: "0", value: s.sticky_ttl_sec || 0 }), "0 = đến khi đóng trình duyệt. Upstream lỗi thì khách được chuyển sang upstream khác.")]),
+      field("Header gửi lên upstream", el("textarea", { id: "f-reqh", value: headerLines(s.request_headers), placeholder: "set X-Env: production\nremove X-Debug" }), "Mỗi dòng một rule: set/add/remove. Không sửa được Host (dùng “Host gửi lên upstream”), X-Forwarded-* và header hop-by-hop."),
+      el("div", {}, [field("Header trả về cho khách", el("textarea", { id: "f-resh", value: headerLines(s.response_headers), placeholder: "set X-Frame-Options: SAMEORIGIN\nadd Cache-Control: no-store" })),
+        check("Ẩn header Server, X-Powered-By của upstream", "f-hide", s.hide_server_headers)])])]);
+  }
+  function collectTraffic(body) {
+    try {
+      body.request_headers = parseHeaderLines($("f-reqh").value, "Header gửi lên upstream");
+      body.response_headers = parseHeaderLines($("f-resh").value, "Header trả về cho khách");
+    } catch (e) { toast(e.message, true); return false; }
+    body.lb = $("f-lb").value;
+    body.sticky = $("f-sticky").checked;
+    body.sticky_cookie = $("f-stc").value.trim();
+    body.sticky_ttl_sec = num($("f-stt").value, 0);
+    body.hide_server_headers = $("f-hide").checked;
+    return true;
   }
 
   // ---------- events ----------

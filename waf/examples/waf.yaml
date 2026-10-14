@@ -49,3 +49,9 @@ acme:
 #   webhooks:
 #     - url: https://hooks.example.vn/waf
 #       secret: change-me                            # X-HCW-Signature: sha256=HMAC(body)
+
+# Sites (applications) are managed through the console or the management
+# API, not in this file. See examples/site.json for a site using weighted
+# upstreams ("http://10.0.0.10:8080 weight=3"), "lb" (round_robin, weighted,
+# least_conn, ip_hash, random), sticky sessions and header rewriting
+# (request_headers, response_headers, hide_server_headers).

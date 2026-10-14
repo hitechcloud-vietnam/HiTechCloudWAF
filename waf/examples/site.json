@@ -1,0 +1,27 @@
+{
+  "name": "shop",
+  "server_names": ["shop.example.vn"],
+  "ports": ["80"],
+  "upstreams": [
+    "http://10.0.0.10:8080 weight=3",
+    "http://10.0.0.11:8080",
+    "http://10.0.0.12:8080"
+  ],
+  "lb": "least_conn",
+  "sticky": true,
+  "sticky_cookie": "hcw_srv",
+  "sticky_ttl_sec": 0,
+  "health_check": {"path": "/healthz", "interval_sec": 10, "timeout_sec": 3, "unhealthy": 3, "healthy": 2},
+  "request_headers": [
+    {"action": "set", "name": "X-Env", "value": "production"},
+    {"action": "remove", "name": "X-Debug"}
+  ],
+  "response_headers": [
+    {"action": "set", "name": "X-Frame-Options", "value": "SAMEORIGIN"},
+    {"action": "set", "name": "X-Content-Type-Options", "value": "nosniff"},
+    {"action": "add", "name": "Referrer-Policy", "value": "strict-origin-when-cross-origin"}
+  ],
+  "hide_server_headers": true,
+  "mode": "block",
+  "rate_limit": {"requests": 300, "window_sec": 60, "block_sec": 300}
+}

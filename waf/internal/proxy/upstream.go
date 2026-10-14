@@ -78,6 +78,7 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 			}
 			pr.Out.Header.Set("X-Forwarded-Proto", proto)
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+			s.rewriteRequest(pr)
 			if dyn := s.site.Dynamic; (dyn.HTML || dyn.JS) && pathMatches(pr.In.URL.Path, dyn.Paths) {
 				// Let the transport negotiate and transparently decompress
 				// gzip so the body can be rewritten.
@@ -85,6 +86,7 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			s.rewriteResponse(resp)
 			if v, _ := resp.Request.Context().Value(ctxKey{}).(ctxVal); v.tls && s.site.HSTS {
 				resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			}
@@ -111,29 +113,4 @@ func remoteIP(addr string) net.IP {
 		h = addr
 	}
 	return net.ParseIP(strings.Trim(h, "[]"))
-}
-
-// pick returns the next usable upstream round-robin: not failed by the
-// active health check and not recently erroring. When none qualifies it
-// still tries one rather than failing every request.
-func (s *siteRT) pick() *upstream {
-	n := len(s.upstreams)
-	if n == 0 {
-		return nil
-	}
-	start := int(s.rr.Add(1))
-	now := time.Now().UnixNano()
-	for i := 0; i < n; i++ {
-		u := s.upstreams[(start+i)%n]
-		if !u.unhealthy.Load() && u.downUntil.Load() < now {
-			return u
-		}
-	}
-	for i := 0; i < n; i++ {
-		u := s.upstreams[(start+i)%n]
-		if !u.unhealthy.Load() {
-			return u
-		}
-	}
-	return s.upstreams[start%n]
 }

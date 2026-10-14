@@ -87,6 +87,7 @@ type siteRT struct {
 	allow     []*net.IPNet
 	deny      []*net.IPNet
 	upstreams []*upstream
+	lb        *balancer
 	rr        atomic.Uint32
 	httpsPort int
 }
@@ -232,13 +233,16 @@ func (e *Engine) Apply(sites []model.Site, certs []model.Cert) error {
 			}
 			srt.rules = append(srt.rules, rr)
 		}
+		var weights []int
 		for _, raw := range s.Upstreams {
-			u, err := url.Parse(raw)
+			u, weight, err := model.ParseUpstream(raw)
 			if err != nil {
 				return err
 			}
+			weights = append(weights, weight)
 			srt.upstreams = append(srt.upstreams, e.newUpstream(srt, u))
 		}
+		srt.lb = e.newBalancer(srt, weights)
 		for _, p := range s.Ports {
 			n, isTLS, _ := model.ParsePort(p)
 			if isTLS && srt.httpsPort == 0 {
@@ -706,13 +710,8 @@ rules:
 		}
 	}
 
-	up := s.pick()
-	if up == nil {
-		http.Error(w, "no upstream available", http.StatusBadGateway)
-		return
-	}
 	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, ctxVal{ip: ip, tls: isTLS}))
-	up.proxy.ServeHTTP(w, r)
+	s.forward(w, r, ip)
 }
 
 // inspect runs Coraza phases 0–2. It mirrors coraza/http.processRequest but
