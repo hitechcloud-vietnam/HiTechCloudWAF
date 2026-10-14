@@ -92,7 +92,11 @@ curl -fsSLO https://github.com/hitechcloud-vietnam/HiTechCloudWAF/releases/lates
 sudo bash install.sh node            # một node WAF + console
 ```
 
-Cluster nhiều node, DNS và Docker: [docs/install.vi.md](docs/install.vi.md),
+**Hướng dẫn triển khai chi tiết** (một node, Docker, Kubernetes, cluster + DNS,
+bảo mật, giám sát, sao lưu, nâng cấp, xử lý sự cố):
+[docs/deploy.vi.md](docs/deploy.vi.md).
+
+Cài nhanh cluster nhiều node, DNS và Docker: [docs/install.vi.md](docs/install.vi.md),
 kiến trúc ở [docs/cluster.vi.md](docs/cluster.vi.md).
 
 Kubernetes (Helm chart hoặc manifest thuần): [docs/kubernetes.vi.md](docs/kubernetes.vi.md).

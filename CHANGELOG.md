@@ -19,6 +19,15 @@
 - Bộ kiểm thử đầu-cuối `e2e/` (2 engine, controller, agent, DNS, hcwctl)
   chạy trong CI.
 
+### Công cụ & tài liệu
+- **MCP server cho `hcw-waf`** (`mcp_server/`): 11 công cụ đọc, 6 công cụ ghi
+  (đổi chế độ site, chặn/bỏ chặn IP, tắt/bật rule, xoá cache), chế độ chỉ
+  đọc, stdio cho Claude Desktop/Code, dữ liệu do kẻ tấn công kiểm soát được
+  đánh dấu `untrusted`; image `ghcr.io/hitechcloud-vietnam/hitechcloud-waf-mcp`.
+- **Hướng dẫn triển khai chi tiết** `docs/deploy.vi.md`; `PLAN.md` và `plan/`
+  cho các việc còn lại.
+- Issue template và workflow image MCP không còn trỏ về dự án gốc.
+
 ## v0.5.0 – 2026-10-14
 
 ### Bảo mật (từ đợt rà soát code)

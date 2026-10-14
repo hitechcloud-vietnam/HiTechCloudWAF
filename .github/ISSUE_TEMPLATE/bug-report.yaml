@@ -6,14 +6,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please search the [open issues](https://github.com/chaitin/SafeLine/issues) and [discussion](https://github.com/chaitin/SafeLine/discussions) for duplicate issue first. 
+        Please search the [open issues](https://github.com/hitechcloud-vietnam/HiTechCloudWAF/issues) and [discussion](https://github.com/hitechcloud-vietnam/HiTechCloudWAF/discussions) for duplicate issue first. 
 
   - type: input
     id: version
     attributes:
-      label: SafeLine version
+      label: HiTechCloud WAF version
       description: |
-        Please provide the exact SafeLine version.
+        Please provide the exact HiTechCloud WAF version.
         For nightly or custom builds, provide the image tag or commit ID.
       placeholder: "e.g. 9.4.0"
     validations:

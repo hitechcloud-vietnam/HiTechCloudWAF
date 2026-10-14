@@ -311,7 +311,8 @@ EOF
   info "Controller installed: https://$NAME:7443/  (admin token: $ETC/secrets/admin.token)"
   echo "    Add a node:  install.sh node && install.sh agent --controller https://$NAME:7443 \\"
   echo "                   --enroll-token-file enroll.token --ca ca.crt   (one-time token from the dashboard)"
-  echo "    Add DNS:     install.sh dns --controller https://$NAME:7443 --dns-token \$(cat $ETC/secrets/dns.token) --ca ca.crt --zone ... --ns ..."
+  echo "    Add DNS:     install.sh dns --controller https://$NAME:7443 --dns-token-file dns.token --ca ca.crt --zone ... --ns ..."
+  echo "                 (copy $ETC/secrets/dns.token and $ETC/tls/ca.crt to the DNS host)"
   ;;
 
 dns)

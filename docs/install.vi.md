@@ -2,6 +2,9 @@ English: [en/install.md](en/install.md)
 
 # Cài đặt HiTechCloud WAF
 
+> Hướng dẫn đầy đủ từng bước (tường lửa, HTTPS, cluster, bảo mật, giám sát,
+> sao lưu, nâng cấp, xử lý sự cố): [deploy.vi.md](deploy.vi.md).
+
 Có hai cách cài: dùng **binary + systemd** (khuyên dùng, không cần Docker)
 hoặc dùng **Docker** (`waf/deploy/compose.yaml`, image trên GHCR).
 
