@@ -3,7 +3,7 @@ English: [en/engine.md](en/engine.md)
 # HiTechCloud WAF Engine (`waf/`)
 
 Engine WAF riêng của HiTechCloud, mã nguồn mở hoàn toàn, **không phụ thuộc
-image của Chaitin**. Binary: `hcw-waf`.
+image engine của bên thứ ba**. Binary: `hcw-waf`.
 
 ## Luồng xử lý một request
 
@@ -47,21 +47,26 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `static_fast_path` | `true`: request file tĩnh chỉ chạy CRS phase 1 (mặc định `false`, xem "Giới hạn kiểm tra") |
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Danh sách IP hoặc CIDR |
-| `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
+| `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id` hoặc bật `auto_tls`) |
 | `upstreams` | `http(s)://host:port`, có thể nhiều upstream; thêm ` weight=N` (1–100) để đặt trọng số |
 | `lb` | Thuật toán cân bằng tải: `round_robin` (mặc định), `weighted`, `least_conn`, `ip_hash`, `random` |
 | `sticky`, `sticky_cookie`, `sticky_ttl_sec` | Giữ khách ở một upstream bằng cookie (mặc định `hcw_srv`, hết hạn khi đóng trình duyệt) |
 | `request_headers`, `response_headers` | Rule `set` / `add` / `remove` header gửi lên upstream và trả về cho khách |
 | `hide_server_headers` | Xoá `Server`, `X-Powered-By`, `X-AspNet-Version`, `X-AspNetMvc-Version` khỏi response của upstream |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
-| `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
+| `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`; không dùng được với tên wildcard `*.domain` hay `_`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
 | `threat_intel` | `off` (mặc định), `block`, `challenge`, `monitor`: xử lý IP nằm trong danh sách đe dọa (xem bên dưới) |
+| `bot_challenge`, `auth` | Anti-bot challenge và mật khẩu bảo vệ site (xem bên dưới) |
 | `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
+| `cache`, `compress` | Cache response tĩnh trong RAM và nén gzip (xem bên dưới) |
 | `rules` | Rule theo đường dẫn (xem bên dưới) |
 | `health_check` | `{path, interval_sec, timeout_sec, unhealthy, healthy}`: kiểm tra upstream chủ động |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
+
+Đặc tả đầy đủ của object (mọi trường, giá trị mặc định và giới hạn) là schema
+`Site` trong [`docs/api/waf.openapi.yaml`](api/waf.openapi.yaml).
 
 ### Rule theo đường dẫn (`rules`)
 
@@ -228,8 +233,7 @@ Nội dung gzip từ upstream được tự giải nén. Response đã mã hoá 
 **Lưu ý:**
 
 - Đây là **làm rối** (obfuscation), không phải mã hoá bảo mật: khoá đi kèm
-  trang. Mục đích là tăng chi phí cho kẻ thu thập dữ liệu và phân tích mã,
-  tương tự tính năng của SafeLine.
+  trang. Mục đích là tăng chi phí cho kẻ thu thập dữ liệu và phân tích mã.
 - Công cụ tìm kiếm có chạy JS (Googlebot) vẫn đọc được, nhưng nên giới hạn bằng
   `paths` cho khu vực cần bảo vệ (giá, nội dung độc quyền) để không ảnh hưởng
   SEO.
@@ -262,6 +266,10 @@ nên mọi request (kể cả request trúng cache) vẫn bị kiểm tra đầy
 - Khi cấu hình một site thay đổi, cache của site đó bị xoá để không trả nội
   dung sinh ra theo cấu hình cũ. Header `Cache-Control: no-cache` từ client
   **không** bỏ qua cache.
+- Xoá cache thủ công (ví dụ sau khi deploy bản mới):
+  `POST /api/open/cache/purge` với `{"site_id": 1, "prefix": "/static/"}`
+  (`site_id` 0 = mọi site, `prefix` rỗng = toàn bộ); `GET /api/open/cache`
+  trả số object và dung lượng đang dùng.
 
 ### Nén gzip (`compress`)
 
@@ -503,7 +511,8 @@ scrape_configs:
 ## Console web quản trị
 
 Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
-(`https://127.0.0.1:9443/`). Có hai cách đăng nhập:
+(`https://127.0.0.1:9443/`). Giao diện có tiếng Việt và tiếng Anh (chọn ngôn
+ngữ ngay trên console). Có hai cách đăng nhập:
 
 - **Tài khoản người dùng** (khuyên dùng). Lần đầu, đăng nhập bằng API token,
   vào trang **Người dùng** để tạo tài khoản quản trị. Có hai vai trò:
@@ -548,9 +557,13 @@ Chức năng:
   các loại tấn công gần đây, thống kê theo từng ứng dụng.
 - **Ứng dụng:** thêm, sửa, xoá; cấu hình đủ chế độ CRS, rate limit, ACL,
   anti-bot, mật khẩu, HTTPS và các tuỳ chọn proxy.
-- **Sự kiện tấn công:** lọc theo ứng dụng, xem chi tiết rule đã khớp. Có nút
-  **Chặn IP** (thêm IP vào denylist) và **Báo chặn nhầm** (tắt các rule đã
-  khớp cho site đó).
+- **Sự kiện tấn công:** lọc theo ứng dụng, loại, hành động, IP/CIDR, nội
+  dung (URI, tên miền, User-Agent), khoảng thời gian, rule và quốc gia; bảng
+  **Top** theo IP, URI, rule, quốc gia hoặc loại (bấm một dòng để lọc); **Xuất
+  CSV/JSON** các sự kiện khớp bộ lọc. Chi tiết sự kiện hiện các rule đã khớp,
+  kèm nút **Chặn IP** (thêm IP vào denylist của ứng dụng đó), **Chặn IP này
+  trên mọi ứng dụng** và **Báo chặn nhầm** (tắt các rule đã khớp cho site
+  đó).
 - **Chứng chỉ:** tải lên chứng chỉ PEM; cảnh báo khi sắp hết hạn.
 
 Tên, màu và logo theo phần `brand` trong cấu hình (whitelabel). Console
@@ -567,6 +580,9 @@ hạn IP được vào.
 
 ## API quản trị
 
+Đặc tả đầy đủ: [`docs/api/waf.openapi.yaml`](api/waf.openapi.yaml) (cách
+dùng và ví dụ ở [docs/api/README.md](api/README.md)).
+
 Mặc định ở `https://127.0.0.1:9443`. Token gửi qua header `X-HCW-API-TOKEN`
 hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 `{"data": …, "err": null, "msg": ""}`.
@@ -577,11 +593,21 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | GET / POST / PUT | `/api/open/site` | object Site (PUT phải có `id`) |
 | DELETE | `/api/open/site` | `{"ids":[1,2]}` |
 | GET / POST / PUT / DELETE | `/api/open/cert` | `{"crt": PEM, "key": PEM}` |
-| GET | `/api/open/events?limit=100&site_id=1` | – |
+| GET | `/api/open/events?limit=100&site_id=1` | – (bộ lọc ở dưới) |
+| GET | `/api/open/events/export?format=csv` | – (`csv` hoặc `json`, cùng bộ lọc; mỗi lần xuất được ghi audit) |
+| GET | `/api/open/events/top?by=ip` | – (`by`: `ip`, `uri`, `rule`, `country`, `kind`; cùng bộ lọc) |
+| POST | `/api/open/site/ip-deny` | `{"ip": "203.0.113.7", "site_ids": [1]}` (`site_ids` rỗng = mọi site) |
 | GET | `/api/open/stats` | – |
 | GET | `/api/open/timeseries` | – (60 phút gần nhất) |
 | GET | `/api/open/info` | – (version, số site) |
 | GET | `/api/open/threatintel` | – (trạng thái các nguồn threat intelligence) |
+| GET | `/api/open/upstreams` | – (trạng thái health check của upstream) |
+| GET | `/api/open/cache` | – (số object, dung lượng cache) |
+| POST | `/api/open/cache/purge` | `{"site_id": 0, "prefix": ""}` (xem *Cache response*) |
+| GET | `/api/open/metrics` | – (Prometheus) |
+| GET | `/api/open/backup` | – (admin) |
+| POST | `/api/open/restore` | file sao lưu (admin) |
+| GET | `/api/open/audit?limit=200` | – (nhật ký thao tác, admin) |
 | GET | `/api/open/brand` | – (không cần token) |
 | POST | `/api/auth/login` | `{"username","password","otp"}` → `token` (gửi qua header `X-HCW-Session`) |
 | POST | `/api/auth/logout` | – |
@@ -589,6 +615,13 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | POST | `/api/open/me/password`, `/me/totp/setup`, `/me/totp/enable`, `/me/totp/disable` | – |
 | GET / POST / PUT / DELETE | `/api/open/users` | quản lý người dùng (admin) |
 | POST | `/api/open/alerts/test` | – |
+
+Bộ lọc sự kiện (dùng chung cho `events`, `events/export`, `events/top`):
+`site_id`, `kind` và `action` (nhiều giá trị cách nhau bằng dấu phẩy),
+`ip` (IP hoặc CIDR), `country`, `rule` (ID rule), `q` (tìm trong URI, tên
+miền, User-Agent), `since`/`until` (RFC 3339 hoặc khoảng lùi như `15m`,
+`24h`, `7d`). `limit` của `events` mặc định 100, tối đa 1000; `events/export`
+không đặt `limit` thì xuất mọi sự kiện còn giữ trong bộ nhớ (`events_kept`).
 
 Ví dụ:
 

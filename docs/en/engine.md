@@ -11,16 +11,25 @@ third-party engine image**. Binary: `hcw-waf`.
 Client ─► listener (HTTP / HTTPS by SNI)
           │
           ├─ pick the site by Host (exact name, wildcard *.domain, or "_")
-          ├─ HTTPS redirect (optional)
+          ├─ non-canonical path (`/./`, `/../`, `//`, `\`) → 400
+          ├─ HTTPS redirect (optional, only to the site's own domain names)
           ├─ IP ACL: ip_deny → 403, ip_allow (if set) → 403
           ├─ Path rules (allow / deny / skip_waf / rate_limit)
-          ├─ Rate limit per IP/site → 429 + block duration
+          ├─ Threat intelligence: IP on a threat list → 403 / challenge / log
+          ├─ Rate limit per IP/site (IPv6 grouped by /64) → 429 + block duration
           ├─ Auth challenge (password) → login page
           ├─ Anti-bot challenge (JS proof-of-work) → browser check page
+          │   (search engine bots verified through DNS skip it when allow_verified is on)
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanners, protocol attacks…) → 403
-          ├─ Reverse proxy → upstream (round-robin; a failing upstream is skipped for 10s)
-          └─ Dynamic protection: encode HTML/JS in the response (optional)
+          │   (limits on argument count/body size and concurrent
+          │   inspections, see "Inspection limits"; static files may run phase 1 only)
+          ├─ In-memory cache of static responses (optional) → served at once, no upstream call
+          ├─ Reverse proxy → upstream (round-robin / weighted / least_conn /
+          │   ip_hash / random, sticky sessions; a failing upstream is skipped for 10s)
+          ├─ Request/response header rewriting from the site configuration
+          ├─ Dynamic protection: encode HTML/JS in the response (optional)
+          └─ Gzip compression of the response to the client (optional)
 ```
 
 The block page carries the HiTechCloud brand and shows an **Event ID** for
@@ -39,13 +48,20 @@ file.
 | `static_fast_path` | `true`: requests for static files run only CRS phase 1 (default `false`, see "Inspection limits") |
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Lists of IPs or CIDRs |
-| `ports` | `"80"`, `"443_ssl"` (an `_ssl` port requires `cert_id`) |
-| `upstreams` | `http(s)://host:port`, several upstreams allowed |
+| `ports` | `"80"`, `"443_ssl"` (an `_ssl` port requires `cert_id` or `auto_tls`) |
+| `upstreams` | `http(s)://host:port`, several upstreams allowed; append ` weight=N` (1–100) to set a weight |
+| `lb` | Load-balancing algorithm: `round_robin` (default), `weighted`, `least_conn`, `ip_hash`, `random` |
+| `sticky`, `sticky_cookie`, `sticky_ttl_sec` | Keep a visitor on one upstream with a cookie (default `hcw_srv`, expires when the browser closes) |
+| `request_headers`, `response_headers` | `set` / `add` / `remove` rules for headers sent to the upstream and returned to the visitor |
+| `hide_server_headers` | Strip `Server`, `X-Powered-By`, `X-AspNet-Version`, `X-AspNetMvc-Version` from upstream responses |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Proxy options |
-| `auto_tls` | Obtain and renew Let's Encrypt certificates automatically (needs `acme.enabled`) |
+| `auto_tls` | Obtain and renew Let's Encrypt certificates automatically (needs `acme.enabled`; not possible for wildcard `*.domain` or `_` names) |
 | `hsts` | Add `Strict-Transport-Security` to HTTPS responses |
 | `country_allow` / `country_deny` | ISO country codes, e.g. `VN`. Needs `geoip_db` on the node |
+| `threat_intel` | `off` (default), `block`, `challenge`, `monitor`: what to do with IPs on a threat list (see below) |
+| `bot_challenge`, `auth` | Anti-bot challenge and site password (see below) |
 | `dynamic_protection` | Encode HTML/JS on every response, against data harvesting (see below) |
+| `cache`, `compress` | In-memory cache of static responses and gzip compression (see below) |
 | `rules` | Path rules (see below) |
 | `health_check` | `{path, interval_sec, timeout_sec, unhealthy, healthy}`: active upstream checks |
 | `custom_rules` | The site's own SecLang rules (IDs 1–99999, no `Include` and no file reads) |
@@ -93,6 +109,32 @@ from the same IP.
 Use `exclude_paths` for APIs, webhooks and mobile apps, since these clients
 cannot run JS.
 
+#### Verified search engine bots (`allow_verified`)
+
+`{"enabled": true, "allow_verified": true}`
+
+Search engine crawlers cannot run JS, so they would get stuck on the
+challenge page, which hurts SEO. With `allow_verified` on, requests whose
+User-Agent claims to be Googlebot, Bingbot, Applebot, YandexBot, Baiduspider,
+Yahoo Slurp or coccocbot are checked with **reverse DNS + forward
+confirmation**:
+
+1. Look up the PTR of the IP, for example `crawl-66-249-66-1.googlebot.com`.
+2. The name must belong to the bot's official domain (`googlebot.com`,
+   `google.com`, `search.msn.com`, `applebot.apple.com`,
+   `yandex.ru/.net/.com`, `baidu.com/.jp`, `crawl.yahoo.net`, `coccoc.com`).
+3. Resolving that name forward must give back the original IP. This step
+   stops anyone who sets a fake PTR on their own IP.
+
+A bot that passes all three steps skips the anti-bot challenge (including the
+challenge required by threat intelligence), **but still goes through the WAF
+filter**, rate limits and ACLs. A bot that only fakes the User-Agent is
+treated like any other visitor. Results are cached for 6 hours (temporary DNS
+errors for only 1 minute); the cache holds at most 20,000 entries, each lookup
+has a 2-second timeout and at most 64 lookups run at once; beyond that the
+request is treated as unverified. `googleusercontent.com` is not accepted,
+since every virtual machine on Google Cloud gets a PTR of that form.
+
 ### Auth challenge (`auth`)
 
 `{"enabled": true, "password": "…", "ttl_sec": 28800, "exclude_paths": []}`
@@ -117,33 +159,61 @@ refused (see below).
 
 ### Inspection limits
 
-The CRS costs CPU per argument and per byte inspected (at PL1 about 0.25 ms
-per query argument, 0.4 ms per JSON field and 6–8 µs per byte of values: a
-1 MB JSON body is ≈ 8 s of CPU). The engine therefore applies:
+The OWASP CRS costs CPU per **argument** and per **byte** inspected: at PL1
+about 0.25 ms per query argument, 0.4 ms per JSON field and 6–8 µs per byte of
+values (a 1 MB JSON body ≈ 8 s of CPU). Without limits, a few requests per
+second would be enough to take all of a node's CPU. The engine applies these
+limits:
 
 | Limit | Default | Over the limit |
 |---|---|---|
-| Arguments per collection (query, body) – site `max_args` | 255 | 400, rule 100002 (query) / 100003 (body), before the CRS rules of that phase |
-| Query + body arguments (CRS `tx.max_num_args` = `max_args`) | 255 | CRS rule 920380, critical score |
-| JSON nesting depth | 64 | 400, rule 200002 |
-| Body parsed into arguments (all but multipart and binary) – node `body_args_limit_kb` | 128 KB, at most `body_limit_kb` | `block` sites: 413, event kind `body_limit`; `monitor` sites: only the first 128 KB is inspected and a `body_limit` monitor event is recorded |
-| CRS inspections running at once on the node – `waf_concurrency` | 2 × `GOMAXPROCS` | the request waits; 503 (`Retry-After: 5`) when the client leaves or after 10 s |
+| Arguments per collection (query, body) – site `max_args` | 255 | 400, rule 100002 (query) / 100003 (body), before any CRS rule of that phase runs |
+| Query + body arguments in total (CRS `tx.max_num_args`, same value as `max_args`) | 255 | CRS rule 920380 adds a critical score (blocks at the default threshold of 5) |
+| JSON nesting depth | 64 | 400, rule 200002 (body parsing error) |
+| Body parsed into arguments (JSON, form, XML, text – all but multipart and binary) – node `body_args_limit_kb` | 128 KB (like ModSecurity's `SecRequestBodyNoFilesLimit`), at most `body_limit_kb` | `block` sites: 413, event kind `body_limit`. `monitor` sites: only the first 128 KB is inspected, a `body_limit`/`monitor` event is recorded and the request goes through |
+| CRS inspections running at once on the node – `waf_concurrency` | 2 × the number of cores (`GOMAXPROCS`) | the request waits; if the client disconnects or the wait exceeds 10 seconds → 503 (`Retry-After: 5`) |
 
-Request bodies are read before an inspection slot is taken (slow uploads do
-not hold one; over 128 KB they are spooled to a temporary file), and the
-Coraza transaction is closed as soon as the verdict is known, before the
-request is proxied, so long responses (SSE, long polling) keep no WAF memory.
+`monitor` sites are not blocked for exceeding `max_args`, but only the first
+`max_args` arguments are inspected and a `monitor` event is still recorded
+(rule 100002/100003). An API that needs larger bodies can raise
+`body_args_limit_kb` on the node, or use a `skip_waf` rule for that path; a
+site that needs more fields (for example a large admin form) raises
+`max_args`.
 
-**`static_fast_path`** (off by default): `GET`/`HEAD` requests with no query
-string, no body, a static extension (`.css .js .mjs .map .png .jpg .jpeg .gif
-.svg .webp .avif .ico .bmp .woff .woff2 .ttf .otf .eot`), no `;` and no
-script name in the path (`/index.php/app.css` is not static) run only CRS
-phase 1 (protocol, method, scanner and header checks) with early blocking
-(rule 949111), so scanners are still blocked. IP/country ACLs, path rules,
-threat intelligence, rate limits, auth and bot challenges always apply. The
-trade-off: cookies and arguments are inspected in phase 2, so an attack in a
-cookie sent with a static file request is not detected. Enable it only when
-static files are not served by application code.
+In addition:
+
+- The body is read **before** an inspection slot is taken, so a slow upload
+  does not hold a slot other visitors need. Bodies ≤ 128 KB stay in RAM;
+  larger ones are written to a temporary file that is deleted when the
+  request ends.
+- The Coraza transaction (a few MB per request) is closed **as soon as the
+  verdict is known**, before the request is proxied upstream. Long responses
+  (SSE, long polling, downloads) no longer hold WAF memory.
+
+#### Static file fast path (`static_fast_path`)
+
+Off by default. When on, a request that meets **all** of the following runs
+only CRS phase 1 (protocol, method, scanner and header checks), not phase 2:
+
+- method `GET` or `HEAD`, no query string (not even an empty `?`), no body;
+- the path ends in `.css .js .mjs .map .png .jpg .jpeg .gif .svg .webp
+  .avif .ico .bmp .woff .woff2 .ttf .otf .eot`;
+- the path has no `;` and no segment with a script extension (`.php`,
+  `.asp`, `.aspx`, `.jsp`, `.cgi`, `.pl`, `.py`…), because
+  `/index.php/app.css` runs `index.php` on many servers.
+
+The phase 1 anomaly score is still evaluated (CRS early blocking, rule
+949111), so scanners such as sqlmap and nikto are still blocked on static
+files. IP and country ACLs, path rules, threat intelligence, rate limits, auth
+and the anti-bot challenge **always** run as usual.
+
+The trade-off: phase 2 is where the CRS inspects cookies and arguments, so an
+attack payload in a cookie sent with a static file request is not detected.
+Enable it only when static files really are served by a static web server or
+CDN and do not go through application code (for example a framework that
+routes every path to one controller). Measured on a 4 vCPU machine: a `.css`
+request with browser headers drops from ~2.4–2.6 ms to ~0.65 ms of CPU (see
+`bench/RESULTS.md`).
 
 Tip: run in `monitor` for a few days to review the log, add `disabled_rules`
 for rules that cause false positives, then switch to `block`.
@@ -182,6 +252,55 @@ responses carry `Cache-Control: no-store` and the `X-HCW-Protected` header.
   proprietary content) so SEO is not affected.
 - Tested on real Chromium: titles, CSS, external/inline scripts and
   Vietnamese text all render correctly, with no console errors.
+
+### Response cache (`cache`)
+
+`{"enabled": true, "ttl_sec": 300, "max_object_kb": 1024, "paths": [], "extensions": [".css", ".js", ".png"]}`
+
+The engine keeps copies of static responses in RAM so repeated requests do
+not have to reach the upstream. The cache is checked **after** ACLs, rate
+limits, challenges and the WAF, so every request (including cache hits) is
+still fully inspected.
+
+- Non-empty `paths`: cache everything under these path prefixes (ignoring
+  `extensions`). Empty: cache by the extensions in `extensions` (default
+  `.css .js .png .jpg .jpeg .gif .svg .webp .ico .woff .woff2 .ttf .map`).
+- `ttl_sec` defaults to 300, at most 86400; if the upstream sends a shorter
+  `Cache-Control: s-maxage`/`max-age`, that value is used.
+- Only `200` responses to `GET` are stored (HEAD shares the GET copy), with no
+  `Set-Cookie`, no `Cache-Control: private/no-store/no-cache`, no `Vary`
+  (except `Accept-Encoding`), a body ≤ `max_object_kb`, and not a response
+  that went through dynamic protection (`X-HCW-Protected`). Requests with
+  `Authorization` or `Range` always go straight to the upstream.
+- Responses carry `X-HCW-Cache: MISS` (just stored) or `HIT` (served from the
+  cache, with `Age`). An `If-None-Match` matching the ETag gets a `304`.
+- All sites share one LRU memory area, sized by `cache_mb` in `waf.yaml`
+  (default 256, `-1` to disable). When it is full, the least recently used
+  objects are evicted first.
+- When a site's configuration changes, that site's cache is cleared so content
+  produced under the old configuration is not served. A client's
+  `Cache-Control: no-cache` header does **not** bypass the cache.
+- Manual purge (for example after deploying a new release):
+  `POST /api/open/cache/purge` with `{"site_id": 1, "prefix": "/static/"}`
+  (`site_id` 0 = every site, empty `prefix` = everything); `GET /api/open/cache`
+  returns the number of objects and the memory in use.
+
+### Gzip compression (`compress`)
+
+`"compress": true` compresses responses to the client when the client accepts
+gzip, the upstream did not compress them, the content type is `text/*`
+(except `text/event-stream`), `application/javascript`, `application/json`,
+`application/xml` or `image/svg+xml`, and the declared body is ≥ 1 KB (bodies
+of unknown length are compressed too). Responses get `Vary: Accept-Encoding`
+and the ETag becomes a weak ETag (`W/"…"`).
+
+Compression runs while the data is being sent, so it does not slow down
+streaming; SSE, WebSocket and `HEAD` requests are left untouched. Cached
+objects are stored uncompressed, together with a gzip copy made once when the
+object is stored, so cache hits do not have to be compressed again. Note: on
+cached paths the engine decompresses gzip responses from the upstream before
+storing them; without `compress`, clients receive the uncompressed copy, so
+enable `compress` together with `cache`.
 
 ### Automatic HTTPS (Let's Encrypt)
 
@@ -222,6 +341,66 @@ How each case is handled:
 
 Every attack event records the country code.
 
+### Threat intelligence (IP threat lists)
+
+Declare the feeds in the node's `waf.yaml`:
+
+```yaml
+threat_intel:
+  timeout: 60s          # longest time for one download
+  max_size_mb: 32       # larger lists are refused
+  feeds:
+    - name: firehol_level1
+      url: https://iplists.firehol.org/files/firehol_level1.netset
+      refresh: 1h       # default 1h, minimum 1m
+    - name: spamhaus_drop
+      url: https://www.spamhaus.org/drop/drop.txt
+      refresh: 12h
+    - name: local
+      url: file:///etc/hcw-waf/blocklist.txt
+```
+
+Then enable it per site: `"threat_intel": "block"` (or pick it in the
+application form of the console).
+
+| Value | Effect on IPs on a list |
+|---|---|
+| `off` | No check (default) |
+| `block` | Return the 403 block page, record a `threat_intel` event with the feed name |
+| `challenge` | Require the anti-bot challenge (even when `bot_challenge` is not enabled; uses the `difficulty`, `ttl_sec` and `exclude_paths` of `bot_challenge`) |
+| `monitor` | Let the request through, only record an event |
+
+- **Format:** plain text, one IP, CIDR or `a-b` range per line, IPv4 and
+  IPv6. Anything after `#` or `;` is a comment, so FireHOL `.netset`/`.ipset`
+  files and Spamhaus DROP (`1.10.16.0/20 ; SBL256894`) work as is. A
+  `0.0.0.0/0` line is ignored.
+- **Background download:** each feed is downloaded every `refresh` (plus up to
+  10% random jitter so nodes do not all download at once), using
+  `If-None-Match`/`If-Modified-Since`, so an unchanged list only costs a 304
+  response.
+- **Fail-safe:** on a download error, timeout, oversized list or an HTML page,
+  the previous list stays in use; the error is shown on the **System** page
+  and the download is retried within at most 5 minutes.
+- **Offline start:** after each successful download a copy is written to
+  `<data_dir>/threatintel/`. At start-up the node loads that copy first, so it
+  is protected even before it can reach the Internet.
+- **Fast lookups:** ranges are sorted, merged and binary-searched, O(log n),
+  which handles lists of hundreds of thousands of lines.
+- **Never blocked:** loopback, private (10/8, 172.16/12, 192.168/16,
+  fc00::/7), link-local and CGNAT (100.64/10) addresses. FireHOL level1
+  contains these bogon ranges; without this exclusion internal clients and
+  load balancers would be blocked.
+- **False positives:** an `allow` path rule (optionally with `ips`) skips the
+  threat intelligence check.
+- The engine uses the real client IP according to `trusted_proxies`: if the
+  WAF sits behind a load balancer, declare the load balancer's IP range so
+  `X-Forwarded-For` is trusted.
+- See the status (entries, last update, latest error) on the console's
+  **System** page or with `GET /api/open/threatintel`.
+- `threat_intel` events (block, challenge) count towards
+  `hcw_acl_blocked_total`; events in `monitor` mode towards
+  `hcw_monitored_total`.
+
 ### Alerts (Telegram, webhook)
 
 Declared in `waf.yaml` (see `waf/examples/waf.yaml`). How it works:
@@ -231,7 +410,8 @@ Declared in `waf.yaml` (see `waf/examples/waf.yaml`). How it works:
   `interval` (default 5 minutes), with the number of events, the top IPs and
   a sample request.
 - `kinds` selects what to report: `waf`, `geo`, `ip_deny`, `ip_allow`,
-  `rate_limit`, `bot`, `auth`. By default only `waf` is reported.
+  `rate_limit`, `bot`, `auth`, `threat_intel`. By default only `waf` is
+  reported.
 - **Telegram:** create a bot with @BotFather, add it to a group, fill in
   `chat_id`.
 - **Webhook:** receives JSON (`node`, `site`, `kind`, `count`, `top_ips`,
@@ -257,6 +437,72 @@ Declared in `waf.yaml` (see `waf/examples/waf.yaml`). How it works:
 - WebSocket and other upgraded protocols (Upgrade) pass through the WAF
   normally.
 
+### Load balancing and sticky sessions
+
+```json
+"upstreams": ["http://10.0.0.10:8080 weight=3", "http://10.0.0.11:8080", "http://10.0.0.12:8080"],
+"lb": "least_conn",
+"sticky": true,
+"sticky_cookie": "hcw_srv",
+"sticky_ttl_sec": 0
+```
+
+Each upstream is still a URL string as before; to set a weight, append
+` weight=N` (1–100, default 1). Older configurations with a plain list of URLs
+keep working as before (round-robin).
+
+| `lb` | How an upstream is chosen |
+|---|---|
+| `round_robin` | Each upstream in turn, weights ignored. Default when no upstream has a `weight` |
+| `weighted` | Round-robin by weight, evenly interleaved (smooth weighted round-robin as in nginx). Default when a `weight` is set |
+| `least_conn` | The upstream with the fewest in-flight requests relative to its weight (open WebSockets included) |
+| `ip_hash` | Consistent hashing of the client IP (IPv6 by /64). When an upstream fails or is removed from the configuration, only that upstream's visitors move; the others keep their upstream |
+| `random` | Random, by weight |
+
+- Every algorithm only picks from the best group of upstreams available:
+  first the healthy ones (per `health_check`) that have not failed in the
+  last 10 seconds; failing that, the upstreams not taken out by the health
+  check; if all of them are failing, it still tries one upstream instead of
+  failing every request.
+- **Sticky sessions** (`sticky: true`): on the first request the engine picks
+  an upstream with `lb` and returns the `sticky_cookie` cookie (HttpOnly,
+  SameSite=Lax, Secure over HTTPS). The cookie value is an HMAC of the
+  upstream and does not reveal the origin server's address; nodes sharing the
+  same `challenge_secret_file` accept each other's cookies. If the pinned
+  upstream fails, the visitor is moved to another upstream and receives a new
+  cookie. `sticky_ttl_sec` = 0 means the cookie expires when the browser
+  closes.
+
+### Header rewriting (`request_headers`, `response_headers`)
+
+```json
+"request_headers": [
+  {"action": "set", "name": "X-Env", "value": "production"},
+  {"action": "remove", "name": "X-Debug"}
+],
+"response_headers": [
+  {"action": "set", "name": "X-Frame-Options", "value": "SAMEORIGIN"},
+  {"action": "add", "name": "Cache-Control", "value": "no-store"}
+],
+"hide_server_headers": true
+```
+
+- `set` replaces every existing value, `add` appends a value, `remove`
+  deletes the header. Rules run in order, at most 50 rules per direction.
+  Values are single-line, at most 4096 bytes.
+- Not allowed: hop-by-hop headers (`Connection`, `Keep-Alive`, `TE`,
+  `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`), `Host` (use
+  `upstream_host`), `Content-Length`, `Content-Encoding`. For requests,
+  `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP`,
+  `Forwarded` and `Expect` are also forbidden, because the engine sets these
+  headers itself from the verified IP.
+- Response headers only apply to responses from the upstream, not to the
+  WAF's block or challenge pages. `hsts` is still added after the rules.
+- In the console, enter one rule per line: `set Name: value`,
+  `add Name: value`, `remove Name` (**Load balancing & headers** section).
+
+Full example: `waf/examples/site.json`.
+
 ### Access log
 
 ```yaml
@@ -269,8 +515,8 @@ access_log:
 Each request writes one JSON line with the fields `time`, `site_id`, `host`,
 `client_ip`, `country`, `method`, `uri`, `proto`, `tls`, `status`, `bytes`,
 `duration_ms`, `user_agent`, `referer`, `action` and `event_id` (when
-blocked). `action` takes one of: `proxied`, `blocked`, `challenged`,
-`redirected`, `error`, `acme`.
+blocked). `action` takes one of: `proxied`, `cached` (served from the cache),
+`blocked`, `challenged`, `redirected`, `error`, `acme`.
 
 The log is written asynchronously so it does not slow traffic down; if the
 disk cannot keep up, lines are dropped rather than slowing requests. The JSON
@@ -296,7 +542,8 @@ scrape_configs:
 ## Web admin console
 
 The console is built into `hcw-waf` and served on the same address as the
-API (`https://127.0.0.1:9443/`). There are two ways to log in:
+API (`https://127.0.0.1:9443/`). The interface is available in Vietnamese and
+English (pick the language in the console). There are two ways to log in:
 
 - **User accounts** (recommended). The first time, log in with the API token
   and go to the **Users** page to create an administrator account. There are
@@ -328,6 +575,10 @@ API (`https://127.0.0.1:9443/`). There are two ways to log in:
   and certificate in the file is validated first; a single invalid item
   rejects the whole file and the running configuration is kept. API:
   `GET /api/open/backup`, `POST /api/open/restore`.
+- **Threat intelligence feeds:** each feed with its number of entries, the
+  copy in use (downloaded or local copy), the time of the last update/check
+  and the latest error. API `GET /api/open/threatintel` (readable by both
+  admins and viewers).
 - **Audit log:** every change through the API/console and every login
   (successful or failed) is recorded: who, from which IP, what action, with
   what result, along with the request body. Passwords, keys, tokens and 2FA
@@ -336,13 +587,17 @@ API (`https://127.0.0.1:9443/`). There are two ways to log in:
 
 Features:
 
-- **Overview:** requests and blocks in the last 60 minutes, a per-minute
+- **Dashboard:** requests and blocks in the last 60 minutes, a per-minute
   chart, recent attack types, statistics per application.
 - **Applications:** add, edit, delete; configure CRS mode, rate limit, ACL,
   anti-bot, password, HTTPS and proxy options.
-- **Attack events:** filter by application, see the matched rules in detail.
-  **Block IP** (adds the IP to the denylist) and **Report false positive**
-  (disables the matched rules for that site) buttons.
+- **Attack events:** filter by application, kind, action, IP/CIDR, text (URI,
+  host, User-Agent), time range, rule and country; a **Top** table by IP, URI,
+  rule, country or kind (click a row to filter); **Export CSV/JSON** of the
+  events matching the filter. The event details show the matched rules, with
+  **Block IP** (adds the IP to that application's denylist), **Block this IP
+  on all applications** and **Report false positive** (disables the matched
+  rules for that site) buttons.
 - **Certificates:** upload PEM certificates; warns when they are about to
   expire.
 
@@ -354,7 +609,7 @@ By default the console only listens on `127.0.0.1`. For remote access, either
 use an SSH tunnel, or set `api.listen: 0.0.0.0:9443` together with
 `api.allow` to restrict which IPs may connect.
 
-![Overview](../images/console-dashboard.png)
+![Dashboard](../images/console-dashboard.png)
 ![Events](../images/console-events.png)
 ![Applications](../images/console-site.png)
 
@@ -373,10 +628,21 @@ form `{"data": …, "err": null, "msg": ""}`.
 | GET / POST / PUT | `/api/open/site` | Site object (PUT must include `id`) |
 | DELETE | `/api/open/site` | `{"ids":[1,2]}` |
 | GET / POST / PUT / DELETE | `/api/open/cert` | `{"crt": PEM, "key": PEM}` |
-| GET | `/api/open/events?limit=100&site_id=1` | – |
+| GET | `/api/open/events?limit=100&site_id=1` | – (filters below) |
+| GET | `/api/open/events/export?format=csv` | – (`csv` or `json`, same filters; every export is recorded in the audit log) |
+| GET | `/api/open/events/top?by=ip` | – (`by`: `ip`, `uri`, `rule`, `country`, `kind`; same filters) |
+| POST | `/api/open/site/ip-deny` | `{"ip": "203.0.113.7", "site_ids": [1]}` (empty `site_ids` = every site) |
 | GET | `/api/open/stats` | – |
 | GET | `/api/open/timeseries` | – (last 60 minutes) |
 | GET | `/api/open/info` | – (version, number of sites) |
+| GET | `/api/open/threatintel` | – (status of the threat intelligence feeds) |
+| GET | `/api/open/upstreams` | – (upstream health check status) |
+| GET | `/api/open/cache` | – (number of objects, cache memory) |
+| POST | `/api/open/cache/purge` | `{"site_id": 0, "prefix": ""}` (see *Response cache*) |
+| GET | `/api/open/metrics` | – (Prometheus) |
+| GET | `/api/open/backup` | – (admin) |
+| POST | `/api/open/restore` | backup file (admin) |
+| GET | `/api/open/audit?limit=200` | – (audit log, admin) |
 | GET | `/api/open/brand` | – (no token needed) |
 | POST | `/api/auth/login` | `{"username","password","otp"}` → `token` (send it in the `X-HCW-Session` header) |
 | POST | `/api/auth/logout` | – |
@@ -384,6 +650,13 @@ form `{"data": …, "err": null, "msg": ""}`.
 | POST | `/api/open/me/password`, `/me/totp/setup`, `/me/totp/enable`, `/me/totp/disable` | – |
 | GET / POST / PUT / DELETE | `/api/open/users` | user management (admin) |
 | POST | `/api/open/alerts/test` | – |
+
+Event filters (shared by `events`, `events/export` and `events/top`):
+`site_id`, `kind` and `action` (several values separated by commas), `ip`
+(IP or CIDR), `country`, `rule` (rule ID), `q` (search in URI, host,
+User-Agent), `since`/`until` (RFC 3339 or a look-back such as `15m`, `24h`,
+`7d`). `limit` of `events` defaults to 100, at most 1000; `events/export`
+without `limit` exports every event still kept in memory (`events_kept`).
 
 Example:
 
@@ -411,10 +684,40 @@ whole flow has been tested end to end with 2 real nodes.
 
 - blocking SQLi, XSS, path traversal and RCE in both the query string and
   JSON/form bodies;
+- limits on argument count, JSON depth, argument body size and concurrent
+  inspections (503 when the client gives up), the inspection slot released
+  while the upstream is still streaming; bodies (RAM, temporary file, over
+  `body_limit_kb`, chunked) reach the upstream intact after the transaction
+  is closed; `static_fast_path`;
+- the dynamic protection encoder produces byte-for-byte the same output as
+  the previous one with the same key, and protected scripts run correctly in
+  Node.js;
 - legitimate requests with Vietnamese text and 3 MB uploads pass through;
 - monitor mode;
 - rate limits, ACLs, wildcard hosts;
 - `X-Forwarded-For` is only trusted when coming through a trusted proxy;
+- threat intelligence: parsing FireHOL/Spamhaus DROP, IPv4/IPv6, downloads
+  with ETag/304, keeping the previous list on errors, size limit, timeout,
+  loading the cached copy on an offline start; block/challenge/monitor/off
+  modes;
+- verifying Googlebot/Bingbot with reverse DNS + forward confirmation (fake
+  resolver), fake bots still get the challenge, real bots are still blocked by
+  the WAF when they attack;
 - upstream failover;
+- load distribution per algorithm (weight ratios, least_conn, ip_hash keeping
+  visitors in place when an upstream is removed), sticky sessions and header
+  rewriting;
 - TLS with multiple certificates by SNI;
 - API CRUD and storage.
+
+## Security notes
+
+- `viewer` accounts cannot read certificate private keys, site password
+  hashes or the user list (the API returns `***` or 403).
+- `custom_rules` only accepts `SecRule`, `SecAction`, `SecMarker`,
+  `SecRuleRemoveBy*`, `SecRuleUpdate*`; operators that read files or the
+  network (`@pmf`, `@pmFromFile`, `@ipMatchF`, `@inspectFile`, `@rbl`…) are
+  not allowed.
+- Changing your password ends every other login session of the account.
+- Console logins are rate limited per IP (10 attempts/15 minutes) and per
+  account (50 attempts/15 minutes).

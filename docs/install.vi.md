@@ -35,7 +35,9 @@ ssh -L 9443:127.0.0.1:9443 root@<server>   # rồi mở https://127.0.0.1:9443/
 Nếu muốn mở console ra mạng nhưng chỉ cho một dải IP truy cập:
 `sudo bash install.sh node --public-console 203.0.113.0/24`.
 
-Repo private: đặt thêm `GITHUB_TOKEN=<token đọc được repo>` trước lệnh.
+Repo private: truyền thêm token đọc được repo qua `sudo`, ví dụ
+`sudo GITHUB_TOKEN=<token> bash install.sh node` (`sudo` mặc định không giữ
+biến môi trường đặt trước nó).
 
 ## 2. Cluster nhiều node + DNS
 
@@ -44,18 +46,25 @@ Repo private: đặt thêm `GITHUB_TOKEN=<token đọc được repo>` trước 
 sudo bash install.sh node
 sudo bash install.sh controller --name ctl.waf.example.vn --ip 203.0.113.5
 
-# Mỗi node WAF
+# Mỗi node WAF (enroll.token: token dùng một lần tạo trên dashboard controller)
 sudo bash install.sh node
 sudo bash install.sh agent --controller https://ctl.waf.example.vn:7443 \
-  --node-token <node.token> --ca ca.crt --region hn --pools web --ipv4 <IP public>
+  --enroll-token-file enroll.token --ca ca.crt --region hn --pools web --ipv4 <IP public>
 
 # Ít nhất 2 máy DNS
 sudo bash install.sh dns --controller https://ctl.waf.example.vn:7443 \
-  --dns-token <dns.token> --ca ca.crt --zone waf.example.vn \
+  --dns-token-file dns.token --ca ca.crt --zone waf.example.vn \
   --ns ns1.waf.example.vn,ns2.waf.example.vn
 ```
 
-`node.token`, `dns.token` và `ca.crt` lấy từ `/etc/hcw/` trên máy controller.
+- `ca.crt` lấy từ `/etc/hcw/tls/ca.crt`, `dns.token` từ
+  `/etc/hcw/secrets/dns.token` trên máy controller.
+- `enroll.token`: tạo trên dashboard controller (mục *Đăng ký node*) hoặc
+  `POST /v1/enroll-tokens`, mỗi node một token, chỉ dùng được một lần (xem
+  mục *Đăng ký node* trong [cluster.vi.md](cluster.vi.md)).
+- Token dùng chung `--node-token-file node.token` (`/etc/hcw/secrets/node.token`)
+  vẫn chạy nhưng đã lỗi thời. Các tuỳ chọn `--…-file` giữ token khỏi dòng
+  lệnh và lịch sử shell.
 
 **Cấu hình dùng chung giữa các node:**
 
@@ -83,20 +92,22 @@ trước khi pull, hoặc đặt package ở chế độ public.
 
 ## Cập nhật
 
-Chạy lại `install.sh <vai trò>` với `--version vX.Y.Z`. Token và cấu hình đã
-có được giữ nguyên, rồi khởi động lại service:
+Chạy lại `install.sh <vai trò>` với `--version vX.Y.Z`, rồi khởi động lại
+service (ví dụ):
 
 ```bash
 sudo systemctl restart hcw-waf
 ```
 
-Riêng `controller.yaml` sẽ được ghi lại từ template; nếu đã sửa tay, hãy sao
-lưu trước khi cập nhật.
+Token đã có và `waf.yaml` được giữ nguyên. Riêng `controller.yaml`,
+`agent.yaml` và `dns.yaml` được ghi lại từ template theo tham số của lệnh, nên
+khi cập nhật vai trò `agent`/`dns` phải truyền lại đủ tham số như lúc cài; nếu
+đã sửa tay các file này, hãy sao lưu trước khi cập nhật.
 
 ## Gỡ bỏ
 
 ```bash
 sudo systemctl disable --now hcw-waf hcw-agent hcw-controller hcw-dns 2>/dev/null
-sudo rm -rf /usr/local/bin/hcw-waf /usr/local/bin/hcw /etc/hcw-waf /etc/hcw /var/lib/hcw-waf /var/lib/hcw \
-  /etc/systemd/system/hcw-*.service
+sudo rm -rf /usr/local/bin/hcw-waf /usr/local/bin/hcw /etc/hcw-waf /etc/hcw \
+  /var/lib/hcw-waf /var/lib/hcw /var/lib/hcw-dns /etc/systemd/system/hcw-*.service
 ```

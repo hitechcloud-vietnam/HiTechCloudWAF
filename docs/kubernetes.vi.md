@@ -1,3 +1,5 @@
+English: [en/kubernetes.md](en/kubernetes.md)
+
 # Triển khai HiTechCloud WAF trên Kubernetes
 
 Có hai cách:
@@ -275,9 +277,11 @@ kubectl -n hitechcloud-waf get secret waf-hitechcloud-waf-cluster -o jsonpath='{
 kubectl -n hitechcloud-waf get secret waf-hitechcloud-waf-cluster -o jsonpath='{.data.dns-token}' | base64 -d
 ```
 
-Rồi cài agent/DNS trên máy ngoài theo [install.vi.md](install.vi.md). Ngược
-lại, pod WAF có thể tham gia một controller đặt ở nơi khác:
-`agent.controllerURL`, `agent.controllerCASecret` (khoá `ca.crt`) và
+Rồi cài agent/DNS trên máy ngoài theo [install.vi.md](install.vi.md). Với
+agent ngoài, nên dùng enrollment token dùng một lần tạo trên dashboard
+controller (cổng 7443) thay cho `node-token` dùng chung (đã lỗi thời, xem
+[cluster.vi.md](cluster.vi.md)). Ngược lại, pod WAF có thể tham gia một
+controller đặt ở nơi khác: `agent.controllerURL`, `agent.controllerCASecret` (khoá `ca.crt`) và
 `agent.nodeTokenSecret` (khoá `node-token`), xem
 `ci/edge-daemonset-values.yaml`.
 
