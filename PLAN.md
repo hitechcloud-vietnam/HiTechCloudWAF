@@ -14,7 +14,6 @@ CI xanh, rồi chuyển việc sang mục *Đã xong* bên dưới (và xoá fil
 | # | Việc | Ưu tiên | Ghi chú |
 |---|---|---|---|
 | [01](plan/01-default-branch-main.md) | Đặt `main` làm nhánh mặc định trên GitHub | cao | cần quyền admin repo |
-| [02](plan/02-engine-performance.md) | Tối ưu hiệu năng engine (giới hạn tham số, semaphore, đóng transaction sớm, fast path tĩnh, mã hoá dynamic) | cao | đang làm dở |
 | [03](plan/03-helm-enrollment.md) | Helm chart + bootstrap Docker hỗ trợ enrollment token | trung bình | |
 | [04](plan/04-e2e-enrollment.md) | Bộ e2e dùng enrollment token | trung bình | |
 | [09](plan/09-engine-followups.md) | Engine: health check `last_error`, gộp request cache, timeout listener… | trung bình | 7 mục |
@@ -40,6 +39,9 @@ CI xanh, rồi chuyển việc sang mục *Đã xong* bên dưới (và xoá fil
 - Công cụ: `hcwctl`, MCP server cho hcw-waf, Helm chart + manifest K8s, đặc tả
   OpenAPI + test chống lệch, bộ benchmark, bộ e2e, installer 1 lệnh có kiểm
   tra SHA256.
+- Hiệu năng: giới hạn tham số/body, giới hạn kiểm tra đồng thời, đóng
+  transaction sớm, `static_fast_path`, bộ mã hoá dynamic mới (số liệu ở
+  `bench/RESULTS.md`).
 - Bảo mật: đợt rà soát code (3 lỗi Cao, 5 Trung bình, 8 Thấp) đã sửa kèm test.
 - Phát hành v0.1.0 → v0.6.0; CI: test + race, govulncheck, helm, e2e, image GHCR.
 - Tài liệu: [docs/deploy.vi.md](docs/deploy.vi.md) (triển khai chi tiết),

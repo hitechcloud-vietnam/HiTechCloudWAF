@@ -1,5 +1,27 @@
 # Changelog
 
+## Chưa phát hành
+
+### Engine (`hcw-waf`) – hiệu năng và chống DoS
+- **Giới hạn số tham số** (`max_args` theo site, mặc định 255) và độ sâu JSON
+  (64): vượt thì trả 400 trước khi CRS chạy. Body JSON 1000 khoá: từ ~1,2 giây
+  CPU còn ~1 ms; RAM đỉnh từ 2,3 GB còn 85 MB.
+- **Giới hạn số WAF kiểm tra đồng thời** (`waf_concurrency`, mặc định
+  2×GOMAXPROCS): chờ quá 10 giây hoặc khách bỏ đi thì trả 503.
+- Đóng transaction Coraza ngay sau khi có kết luận (không giữ suốt thời gian
+  proxy/stream); body được giữ bản sao và chuyển đủ cho upstream.
+- **`static_fast_path`** (theo site, mặc định tắt): file tĩnh GET/HEAD không
+  query chỉ chạy CRS phase 1 – CPU giảm ~74%.
+- Bộ mã hoá bảo vệ HTML/JS động nhanh gấp ~3,5 lần, cấp phát ít hơn 8 lần
+  (output không đổi).
+
+### ⚠ Thay đổi cần lưu ý
+- **`body_args_limit_kb`** (cấu hình node, mặc định 128 KB – giống
+  ModSecurity): ở chế độ chặn, body JSON/form/XML lớn hơn bị trả **413**
+  (sự kiện `body_limit`); chế độ giám sát chỉ kiểm tra 128 KB đầu. Site nhận
+  JSON lớn: tăng `body_args_limit_kb` trong `waf.yaml` hoặc dùng rule
+  `skip_waf` cho đường dẫn đó.
+
 ## v0.6.0 – 2026-10-14
 
 ### Engine (`hcw-waf`)
