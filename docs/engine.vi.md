@@ -3,7 +3,7 @@ English: [en/engine.md](en/engine.md)
 # HiTechCloud WAF Engine (`waf/`)
 
 Engine WAF riêng của HiTechCloud, mã nguồn mở hoàn toàn, **không phụ thuộc
-image của Chaitin**. Binary: `hcw-waf`.
+image engine của bên thứ ba**. Binary: `hcw-waf`.
 
 ## Luồng xử lý một request
 
@@ -22,6 +22,8 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           │   (bot tìm kiếm đã xác minh bằng DNS được bỏ qua nếu bật allow_verified)
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
+          │   (giới hạn số tham số/kích thước body và số lượt kiểm tra đồng
+          │   thời, xem "Giới hạn kiểm tra"; file tĩnh có thể chỉ chạy phase 1)
           ├─ Cache response tĩnh trong RAM (tuỳ chọn) → trả ngay, không gọi upstream
           ├─ Reverse proxy → upstream (round-robin / weighted / least_conn /
           │   ip_hash / random, sticky session; upstream lỗi bị loại 10s)
@@ -41,23 +43,30 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `paranoia` | 1–4. Mặc định 1, ít chặn nhầm. PL3–4 bắt được nhiều hơn nhưng cần tinh chỉnh |
 | `anomaly_threshold` | Ngưỡng điểm CRS để chặn (mặc định 5) |
 | `disabled_rules` | Danh sách ID rule CRS tắt cho site, dùng khi bị chặn nhầm |
+| `max_args` | Số tham số tối đa (query, form, trường JSON) được kiểm tra; vượt quá → 400. `0` (mặc định) = 255, tối đa 10000 |
+| `static_fast_path` | `true`: request file tĩnh chỉ chạy CRS phase 1 (mặc định `false`, xem "Giới hạn kiểm tra") |
 | `rate_limit` | `{requests, window_sec, block_sec}` |
 | `ip_allow` / `ip_deny` | Danh sách IP hoặc CIDR |
-| `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
+| `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id` hoặc bật `auto_tls`) |
 | `upstreams` | `http(s)://host:port`, có thể nhiều upstream; thêm ` weight=N` (1–100) để đặt trọng số |
 | `lb` | Thuật toán cân bằng tải: `round_robin` (mặc định), `weighted`, `least_conn`, `ip_hash`, `random` |
 | `sticky`, `sticky_cookie`, `sticky_ttl_sec` | Giữ khách ở một upstream bằng cookie (mặc định `hcw_srv`, hết hạn khi đóng trình duyệt) |
 | `request_headers`, `response_headers` | Rule `set` / `add` / `remove` header gửi lên upstream và trả về cho khách |
 | `hide_server_headers` | Xoá `Server`, `X-Powered-By`, `X-AspNet-Version`, `X-AspNetMvc-Version` khỏi response của upstream |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
-| `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
+| `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`; không dùng được với tên wildcard `*.domain` hay `_`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
 | `threat_intel` | `off` (mặc định), `block`, `challenge`, `monitor`: xử lý IP nằm trong danh sách đe dọa (xem bên dưới) |
+| `bot_challenge`, `auth` | Anti-bot challenge và mật khẩu bảo vệ site (xem bên dưới) |
 | `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
+| `cache`, `compress` | Cache response tĩnh trong RAM và nén gzip (xem bên dưới) |
 | `rules` | Rule theo đường dẫn (xem bên dưới) |
 | `health_check` | `{path, interval_sec, timeout_sec, unhealthy, healthy}`: kiểm tra upstream chủ động |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
+
+Đặc tả đầy đủ của object (mọi trường, giá trị mặc định và giới hạn) là schema
+`Site` trong [`docs/api/waf.openapi.yaml`](api/waf.openapi.yaml).
 
 ### Rule theo đường dẫn (`rules`)
 
@@ -135,8 +144,63 @@ trên Google Cloud đều có PTR dạng này.
 chuyển khách sang node khác, khách không phải giải lại challenge.
 
 Body nhị phân (octet-stream, ảnh, video, zip, pdf, gRPC) chỉ được kiểm tra
-phần header, không quét nội dung. Với body JSON/form, engine kiểm tra
-`body_limit_kb` đầu tiên, phần còn lại vẫn chuyển đủ lên upstream.
+phần header, không quét nội dung. Với body multipart, engine kiểm tra
+`body_limit_kb` đầu tiên, phần còn lại vẫn chuyển đủ lên upstream. Body JSON,
+form, XML lớn hơn `body_args_limit_kb` bị từ chối (xem bên dưới).
+
+### Giới hạn kiểm tra
+
+OWASP CRS tốn CPU theo **số tham số** và **số byte** được kiểm tra: ở PL1
+khoảng 0,25 ms cho mỗi tham số query, 0,4 ms cho mỗi trường JSON và 6–8 µs
+cho mỗi byte giá trị (body JSON 1 MB ≈ 8 giây CPU). Không giới hạn thì vài
+request mỗi giây đủ chiếm hết CPU của node. Engine đặt các giới hạn sau:
+
+| Giới hạn | Mặc định | Vượt quá |
+|---|---|---|
+| Số tham số mỗi nhóm (query, body) – `max_args` của site | 255 | 400, rule 100002 (query) / 100003 (body), trước khi rule CRS nào của phase đó chạy |
+| Tổng tham số query + body (CRS `tx.max_num_args`, cùng giá trị `max_args`) | 255 | rule CRS 920380 cộng điểm critical (chặn ở ngưỡng mặc định 5) |
+| Độ sâu lồng nhau của JSON | 64 | 400, rule 200002 (lỗi phân tích body) |
+| Body được phân tích thành tham số (JSON, form, XML, text – trừ multipart và nhị phân) – `body_args_limit_kb` của node | 128 KB (như `SecRequestBodyNoFilesLimit` của ModSecurity), không quá `body_limit_kb` | site `block`: 413, sự kiện loại `body_limit`. Site `monitor`: chỉ kiểm tra 128 KB đầu, ghi sự kiện `body_limit`/`monitor`, request vẫn đi qua |
+| Số lượt kiểm tra CRS chạy cùng lúc trên node – `waf_concurrency` | 2 × số lõi (`GOMAXPROCS`) | request chờ; khách ngắt kết nối hoặc chờ quá 10 giây → 503 (`Retry-After: 5`) |
+
+Site `monitor` không bị chặn vì vượt `max_args`, nhưng chỉ `max_args` tham số
+đầu được kiểm tra và sự kiện `monitor` vẫn được ghi (rule 100002/100003).
+API cần body lớn hơn có thể tăng `body_args_limit_kb` trên node, hoặc dùng rule
+`skip_waf` cho đường dẫn đó; site cần nhiều trường hơn (ví dụ form quản trị
+lớn) tăng `max_args`.
+
+Thêm vào đó:
+
+- Body được đọc **trước** khi chiếm lượt kiểm tra, nên khách upload chậm không
+  giữ lượt của người khác. Body ≤ 128 KB nằm trong RAM, lớn hơn được ghi ra
+  file tạm và xoá khi request xong.
+- Transaction Coraza (vài MB mỗi request) được đóng **ngay khi có kết quả**,
+  trước khi proxy lên upstream. Response dài (SSE, long polling, tải file)
+  không còn giữ bộ nhớ của WAF.
+
+#### Đường tắt cho file tĩnh (`static_fast_path`)
+
+Mặc định tắt. Khi bật, request thỏa **tất cả** điều kiện sau chỉ chạy phase 1
+của CRS (kiểm tra giao thức, method, scanner, header), không chạy phase 2:
+
+- method `GET` hoặc `HEAD`, không có query string (kể cả `?` rỗng), không có body;
+- đường dẫn kết thúc bằng `.css .js .mjs .map .png .jpg .jpeg .gif .svg .webp
+  .avif .ico .bmp .woff .woff2 .ttf .otf .eot`;
+- đường dẫn không có `;` và không có đoạn nào mang đuôi script (`.php`, `.asp`,
+  `.aspx`, `.jsp`, `.cgi`, `.pl`, `.py`…), vì `/index.php/app.css` chạy
+  `index.php` trên nhiều máy chủ.
+
+Điểm bất thường của phase 1 vẫn được đánh giá (CRS early blocking, rule
+949111), nên scanner như sqlmap, nikto vẫn bị chặn ở file tĩnh. ACL IP, quốc
+gia, rule đường dẫn, threat intelligence, rate limit, auth và anti-bot
+challenge **luôn** chạy như bình thường.
+
+Đánh đổi: phase 2 là nơi CRS kiểm tra cookie và tham số, nên cookie chứa
+payload tấn công gửi kèm request file tĩnh sẽ không bị phát hiện. Chỉ bật khi
+file tĩnh thực sự do web server tĩnh/CDN phục vụ, không đi qua mã ứng dụng
+(ví dụ framework định tuyến mọi đường dẫn vào một controller). Đo trên máy
+4 vCPU: request `.css` với header trình duyệt giảm từ ~2,4–2,6 ms xuống ~0,65 ms
+CPU (xem `bench/RESULTS.md`).
 
 Gợi ý: bật `monitor` vài ngày để xem log, thêm `disabled_rules` cho các rule
 chặn nhầm, rồi mới chuyển sang `block`.
@@ -169,8 +233,7 @@ Nội dung gzip từ upstream được tự giải nén. Response đã mã hoá 
 **Lưu ý:**
 
 - Đây là **làm rối** (obfuscation), không phải mã hoá bảo mật: khoá đi kèm
-  trang. Mục đích là tăng chi phí cho kẻ thu thập dữ liệu và phân tích mã,
-  tương tự tính năng của SafeLine.
+  trang. Mục đích là tăng chi phí cho kẻ thu thập dữ liệu và phân tích mã.
 - Công cụ tìm kiếm có chạy JS (Googlebot) vẫn đọc được, nhưng nên giới hạn bằng
   `paths` cho khu vực cần bảo vệ (giá, nội dung độc quyền) để không ảnh hưởng
   SEO.
@@ -203,6 +266,10 @@ nên mọi request (kể cả request trúng cache) vẫn bị kiểm tra đầy
 - Khi cấu hình một site thay đổi, cache của site đó bị xoá để không trả nội
   dung sinh ra theo cấu hình cũ. Header `Cache-Control: no-cache` từ client
   **không** bỏ qua cache.
+- Xoá cache thủ công (ví dụ sau khi deploy bản mới):
+  `POST /api/open/cache/purge` với `{"site_id": 1, "prefix": "/static/"}`
+  (`site_id` 0 = mọi site, `prefix` rỗng = toàn bộ); `GET /api/open/cache`
+  trả số object và dung lượng đang dùng.
 
 ### Nén gzip (`compress`)
 
@@ -444,7 +511,8 @@ scrape_configs:
 ## Console web quản trị
 
 Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
-(`https://127.0.0.1:9443/`). Có hai cách đăng nhập:
+(`https://127.0.0.1:9443/`). Giao diện có tiếng Việt và tiếng Anh (chọn ngôn
+ngữ ngay trên console). Có hai cách đăng nhập:
 
 - **Tài khoản người dùng** (khuyên dùng). Lần đầu, đăng nhập bằng API token,
   vào trang **Người dùng** để tạo tài khoản quản trị. Có hai vai trò:
@@ -489,9 +557,13 @@ Chức năng:
   các loại tấn công gần đây, thống kê theo từng ứng dụng.
 - **Ứng dụng:** thêm, sửa, xoá; cấu hình đủ chế độ CRS, rate limit, ACL,
   anti-bot, mật khẩu, HTTPS và các tuỳ chọn proxy.
-- **Sự kiện tấn công:** lọc theo ứng dụng, xem chi tiết rule đã khớp. Có nút
-  **Chặn IP** (thêm IP vào denylist) và **Báo chặn nhầm** (tắt các rule đã
-  khớp cho site đó).
+- **Sự kiện tấn công:** lọc theo ứng dụng, loại, hành động, IP/CIDR, nội
+  dung (URI, tên miền, User-Agent), khoảng thời gian, rule và quốc gia; bảng
+  **Top** theo IP, URI, rule, quốc gia hoặc loại (bấm một dòng để lọc); **Xuất
+  CSV/JSON** các sự kiện khớp bộ lọc. Chi tiết sự kiện hiện các rule đã khớp,
+  kèm nút **Chặn IP** (thêm IP vào denylist của ứng dụng đó), **Chặn IP này
+  trên mọi ứng dụng** và **Báo chặn nhầm** (tắt các rule đã khớp cho site
+  đó).
 - **Chứng chỉ:** tải lên chứng chỉ PEM; cảnh báo khi sắp hết hạn.
 
 Tên, màu và logo theo phần `brand` trong cấu hình (whitelabel). Console
@@ -508,6 +580,9 @@ hạn IP được vào.
 
 ## API quản trị
 
+Đặc tả đầy đủ: [`docs/api/waf.openapi.yaml`](api/waf.openapi.yaml) (cách
+dùng và ví dụ ở [docs/api/README.md](api/README.md)).
+
 Mặc định ở `https://127.0.0.1:9443`. Token gửi qua header `X-HCW-API-TOKEN`
 hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 `{"data": …, "err": null, "msg": ""}`.
@@ -518,11 +593,21 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | GET / POST / PUT | `/api/open/site` | object Site (PUT phải có `id`) |
 | DELETE | `/api/open/site` | `{"ids":[1,2]}` |
 | GET / POST / PUT / DELETE | `/api/open/cert` | `{"crt": PEM, "key": PEM}` |
-| GET | `/api/open/events?limit=100&site_id=1` | – |
+| GET | `/api/open/events?limit=100&site_id=1` | – (bộ lọc ở dưới) |
+| GET | `/api/open/events/export?format=csv` | – (`csv` hoặc `json`, cùng bộ lọc; mỗi lần xuất được ghi audit) |
+| GET | `/api/open/events/top?by=ip` | – (`by`: `ip`, `uri`, `rule`, `country`, `kind`; cùng bộ lọc) |
+| POST | `/api/open/site/ip-deny` | `{"ip": "203.0.113.7", "site_ids": [1]}` (`site_ids` rỗng = mọi site) |
 | GET | `/api/open/stats` | – |
 | GET | `/api/open/timeseries` | – (60 phút gần nhất) |
 | GET | `/api/open/info` | – (version, số site) |
 | GET | `/api/open/threatintel` | – (trạng thái các nguồn threat intelligence) |
+| GET | `/api/open/upstreams` | – (trạng thái health check của upstream) |
+| GET | `/api/open/cache` | – (số object, dung lượng cache) |
+| POST | `/api/open/cache/purge` | `{"site_id": 0, "prefix": ""}` (xem *Cache response*) |
+| GET | `/api/open/metrics` | – (Prometheus) |
+| GET | `/api/open/backup` | – (admin) |
+| POST | `/api/open/restore` | file sao lưu (admin) |
+| GET | `/api/open/audit?limit=200` | – (nhật ký thao tác, admin) |
 | GET | `/api/open/brand` | – (không cần token) |
 | POST | `/api/auth/login` | `{"username","password","otp"}` → `token` (gửi qua header `X-HCW-Session`) |
 | POST | `/api/auth/logout` | – |
@@ -530,6 +615,13 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | POST | `/api/open/me/password`, `/me/totp/setup`, `/me/totp/enable`, `/me/totp/disable` | – |
 | GET / POST / PUT / DELETE | `/api/open/users` | quản lý người dùng (admin) |
 | POST | `/api/open/alerts/test` | – |
+
+Bộ lọc sự kiện (dùng chung cho `events`, `events/export`, `events/top`):
+`site_id`, `kind` và `action` (nhiều giá trị cách nhau bằng dấu phẩy),
+`ip` (IP hoặc CIDR), `country`, `rule` (ID rule), `q` (tìm trong URI, tên
+miền, User-Agent), `since`/`until` (RFC 3339 hoặc khoảng lùi như `15m`,
+`24h`, `7d`). `limit` của `events` mặc định 100, tối đa 1000; `events/export`
+không đặt `limit` thì xuất mọi sự kiện còn giữ trong bộ nhớ (`events_kept`).
 
 Ví dụ:
 
@@ -556,6 +648,12 @@ thật.
 `go test -race ./...` gồm:
 
 - chặn SQLi, XSS, path traversal và RCE ở cả query lẫn body JSON/form;
+- giới hạn số tham số, độ sâu JSON, kích thước body tham số, số lượt kiểm tra
+  đồng thời (503 khi khách bỏ đi), lượt kiểm tra được trả ngay khi upstream
+  còn đang stream; body (RAM, file tạm, vượt `body_limit_kb`, chunked) tới
+  upstream nguyên vẹn sau khi transaction đã đóng; `static_fast_path`;
+- bộ mã hoá dynamic protection cho ra đúng từng byte như bản cũ với cùng khoá,
+  script được bảo vệ chạy đúng trong Node.js;
 - request hợp lệ có tiếng Việt và upload 3 MB đều đi qua;
 - chế độ monitor;
 - rate limit, ACL, wildcard host;

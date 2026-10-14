@@ -247,11 +247,12 @@ pháp và xung đột trước khi lưu (lỗi cú pháp → 400, xung đột/tr
 ```bash
 # 1) Control plane
 sudo cluster/deploy/bootstrap-controller.sh controller.example.vn 203.0.113.5
-sudo cp cluster/examples/controller.yaml /etc/hcw/controller.yaml   # sửa cho phù hợp
+sudo cp cluster/examples/controller-hcw-engine.yaml /etc/hcw/controller.yaml   # sửa cho phù hợp
 # Tạo API token trên console primary → /etc/hcw/secrets/primary-engine.token
 docker compose -f cluster/deploy/compose.controller.yaml up -d --build
 
-# 2) Mỗi node WAF (đã chạy engine stack bằng compose.yaml ở gốc repo)
+# 2) Mỗi node WAF (đã chạy engine hcw-waf, ví dụ `docker compose up -d hcw-waf`
+#    trong waf/deploy/)
 #    copy ca.crt từ controller sang /etc/hcw/tls/, tạo enrollment token trên
 #    dashboard và ghi vào /etc/hcw/secrets/enroll.token
 sudo cp cluster/examples/agent.yaml /etc/hcw/agent.yaml             # sửa id/ip/region/pools
@@ -262,6 +263,11 @@ sudo cp cluster/examples/dns.yaml /etc/hcw/dns.yaml
 docker compose -f cluster/deploy/compose.dns.yaml up -d --build
 ```
 
+`controller-hcw-engine.yaml` là mẫu cho engine `hcw-waf`; `controller.yaml`
+là mẫu tổng quát có chú thích đầy đủ mọi tuỳ chọn. Trên node, có thể chạy cả
+engine lẫn agent bằng `waf/deploy/compose.yaml` thay cho `compose.node.yaml`
+(chỉ có agent).
+
 Ở nhà đăng ký tên miền, khai báo `ns1`/`ns2` (glue record) cho zone, ví dụ
 `waf.hitechcloud.vn`. Khách hàng trỏ CNAME tên miền của mình về
 `edge.waf.hitechcloud.vn` (hoặc một record riêng cho từng khách).
@@ -269,6 +275,9 @@ docker compose -f cluster/deploy/compose.dns.yaml up -d --build
 Dashboard: `https://controller.example.vn:7443/`, đăng nhập bằng `admin.token`.
 
 ## API controller
+
+Đặc tả đầy đủ: [`docs/api/cluster.openapi.yaml`](api/cluster.openapi.yaml)
+(xem [docs/api/README.md](api/README.md)).
 
 | Method & path | Token | Mô tả |
 |---|---|---|

@@ -2,6 +2,10 @@ Tiếng Việt: [install.vi.md](../install.vi.md)
 
 # Installing HiTechCloud WAF
 
+> The full step-by-step guide (firewall, HTTPS, cluster, security, monitoring,
+> backups, upgrades, troubleshooting) is currently available in Vietnamese
+> only: [deploy.vi.md](../deploy.vi.md).
+
 There are two ways to install: **binary + systemd** (recommended, no Docker
 needed) or **Docker** (`waf/deploy/compose.yaml`, images on GHCR).
 
@@ -33,8 +37,9 @@ ssh -L 9443:127.0.0.1:9443 root@<server>   # then open https://127.0.0.1:9443/
 To expose the console on the network but allow only one IP range:
 `sudo bash install.sh node --public-console 203.0.113.0/24`.
 
-Private repository: also set `GITHUB_TOKEN=<token that can read the repo>`
-before the command.
+Private repository: pass a token that can read the repository through
+`sudo`, for example `sudo GITHUB_TOKEN=<token> bash install.sh node` (by
+default `sudo` does not keep environment variables set in front of it).
 
 ## 2. Multi-node cluster + DNS
 
@@ -43,19 +48,25 @@ before the command.
 sudo bash install.sh node
 sudo bash install.sh controller --name ctl.waf.example.vn --ip 203.0.113.5
 
-# Each WAF node
+# Each WAF node (enroll.token: one-time token created on the controller dashboard)
 sudo bash install.sh node
 sudo bash install.sh agent --controller https://ctl.waf.example.vn:7443 \
-  --node-token <node.token> --ca ca.crt --region hn --pools web --ipv4 <public IP>
+  --enroll-token-file enroll.token --ca ca.crt --region hn --pools web --ipv4 <public IP>
 
 # At least 2 DNS machines
 sudo bash install.sh dns --controller https://ctl.waf.example.vn:7443 \
-  --dns-token <dns.token> --ca ca.crt --zone waf.example.vn \
+  --dns-token-file dns.token --ca ca.crt --zone waf.example.vn \
   --ns ns1.waf.example.vn,ns2.waf.example.vn
 ```
 
-`node.token`, `dns.token` and `ca.crt` are taken from `/etc/hcw/` on the
-controller machine.
+- `ca.crt` comes from `/etc/hcw/tls/ca.crt` and `dns.token` from
+  `/etc/hcw/secrets/dns.token` on the controller machine.
+- `enroll.token`: created on the controller dashboard (*Đăng ký node* – node
+  enrollment section) or with `POST /v1/enroll-tokens`, one token per node,
+  usable only once (see *Node enrollment* in [cluster.md](cluster.md)).
+- The shared token `--node-token-file node.token`
+  (`/etc/hcw/secrets/node.token`) still works but is deprecated. The
+  `--…-file` options keep tokens out of the command line and shell history.
 
 **Configuration shared between nodes:**
 
@@ -83,20 +94,23 @@ every merge into `main`. If the GHCR packages are private, run
 
 ## Updating
 
-Run `install.sh <role>` again with `--version vX.Y.Z`. Existing tokens and
-configuration are kept; then restart the service:
+Run `install.sh <role>` again with `--version vX.Y.Z`, then restart the
+service (for example):
 
 ```bash
 sudo systemctl restart hcw-waf
 ```
 
-Only `controller.yaml` is rewritten from the template; if you edited it by
-hand, back it up before updating.
+Existing tokens and `waf.yaml` are kept. `controller.yaml`, `agent.yaml` and
+`dns.yaml`, however, are rewritten from the template using the command's
+options, so when updating the `agent`/`dns` roles pass the same options as at
+install time; if you edited these files by hand, back them up before
+updating.
 
 ## Uninstalling
 
 ```bash
 sudo systemctl disable --now hcw-waf hcw-agent hcw-controller hcw-dns 2>/dev/null
-sudo rm -rf /usr/local/bin/hcw-waf /usr/local/bin/hcw /etc/hcw-waf /etc/hcw /var/lib/hcw-waf /var/lib/hcw \
-  /etc/systemd/system/hcw-*.service
+sudo rm -rf /usr/local/bin/hcw-waf /usr/local/bin/hcw /etc/hcw-waf /etc/hcw \
+  /var/lib/hcw-waf /var/lib/hcw /var/lib/hcw-dns /etc/systemd/system/hcw-*.service
 ```
