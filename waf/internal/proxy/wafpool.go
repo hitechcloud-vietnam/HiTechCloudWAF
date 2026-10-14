@@ -20,12 +20,13 @@ type wafKey struct {
 	threshold int
 	disabled  string
 	bodyLimit int
+	custom    string
 }
 
 func keyFor(s *model.Site, bodyLimit int) wafKey {
 	d := append([]int(nil), s.DisabledRules...)
 	sort.Ints(d)
-	return wafKey{mode: s.Mode, paranoia: s.Paranoia, threshold: s.AnomalyThreshold, disabled: fmt.Sprint(d), bodyLimit: bodyLimit}
+	return wafKey{mode: s.Mode, paranoia: s.Paranoia, threshold: s.AnomalyThreshold, disabled: fmt.Sprint(d), bodyLimit: bodyLimit, custom: s.CustomRules}
 }
 
 const allowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form-data| |multipart/related| |text/xml| |application/xml| |application/soap+xml| |application/json| |application/cloudevents+json| |application/cloudevents-batch+json| |application/octet-stream| |application/grpc| |application/grpc-web|"
@@ -71,6 +72,9 @@ func (p *WAFPool) directives(k wafKey, disabled []int) string {
 	if p.extra != "" {
 		b.WriteString(p.extra + "\n")
 	}
+	if k.custom != "" {
+		b.WriteString(k.custom + "\n")
+	}
 	return b.String()
 }
 
@@ -93,6 +97,19 @@ func (p *WAFPool) Get(s *model.Site, bodyLimit int) (coraza.WAF, error) {
 	}
 	p.cache[k] = w
 	return w, nil
+}
+
+// ValidateRules compiles rules alone to report syntax errors before they
+// are stored.
+func ValidateRules(rules string) error {
+	if strings.TrimSpace(rules) == "" {
+		return nil
+	}
+	_, err := coraza.NewWAF(coraza.NewWAFConfig().WithDirectives("SecRuleEngine On\n" + rules))
+	if err != nil {
+		return fmt.Errorf("custom_rules: %w", err)
+	}
+	return nil
 }
 
 // Retain drops cached instances not used by sites, after a reload.

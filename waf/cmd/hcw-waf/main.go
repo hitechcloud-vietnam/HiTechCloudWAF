@@ -26,6 +26,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
@@ -85,6 +88,19 @@ func run(path string, log *slog.Logger) error {
 		Bind: cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
 		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
+	if cfg.ACME.Enabled {
+		m := &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			Email:      cfg.ACME.Email,
+			Cache:      autocert.DirCache(filepath.Join(cfg.DataDir, "acme")),
+			HostPolicy: eng.ACMEHostPolicy,
+		}
+		if cfg.ACME.DirectoryURL != "" {
+			m.Client = &acme.Client{DirectoryURL: cfg.ACME.DirectoryURL}
+		}
+		eng.SetCertProvider(m)
+		log.Info("ACME enabled", "directory", cfg.ACME.DirectoryURL)
+	}
 	start := time.Now()
 	if err := eng.Apply(st.Sites(), st.Certs()); err != nil {
 		// Keep running so the configuration can be fixed through the API.

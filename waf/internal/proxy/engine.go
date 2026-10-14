@@ -81,6 +81,13 @@ type listener struct {
 	srv *http.Server
 }
 
+// CertProvider issues certificates automatically (ACME / Let's Encrypt).
+type CertProvider interface {
+	GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	// HTTPHandler answers HTTP-01 challenges.
+	HTTPHandler(fallback http.Handler) http.Handler
+}
+
 // Engine serves all sites.
 type Engine struct {
 	opt     Options
@@ -91,6 +98,32 @@ type Engine struct {
 	mu        sync.Mutex
 	listeners map[int]*listener
 	ctx       context.Context
+
+	acme atomic.Pointer[acmeBox]
+}
+
+type acmeBox struct{ p CertProvider }
+
+// SetCertProvider enables automatic certificates for sites with auto_tls.
+func (e *Engine) SetCertProvider(p CertProvider) { e.acme.Store(&acmeBox{p}) }
+
+func (e *Engine) certProvider() CertProvider {
+	if b := e.acme.Load(); b != nil {
+		return b.p
+	}
+	return nil
+}
+
+// ACMEHostPolicy allows certificate requests only for exact server names of
+// sites with auto_tls, so nobody can make the node request arbitrary names.
+func (e *Engine) ACMEHostPolicy(_ context.Context, host string) error {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, pr := range e.rt.Load().ports {
+		if s, ok := pr.exact[host]; ok && s.site.AutoTLS {
+			return nil
+		}
+	}
+	return fmt.Errorf("acme: %q is not a server name of an auto_tls site", host)
 }
 
 // New creates an engine; call Apply to load sites and Start to listen.
@@ -189,7 +222,7 @@ func (e *Engine) Apply(sites []model.Site, certs []model.Cert) error {
 					pr.exact[name] = srt
 				}
 			}
-			if isTLS {
+			if isTLS && !(s.AutoTLS && s.CertID == 0) {
 				crt := certByID[s.CertID]
 				if crt == nil {
 					return fmt.Errorf("site %d: cert %d not found", s.ID, s.CertID)
@@ -257,7 +290,8 @@ func (e *Engine) reconcileListeners(rt *runtime) error {
 			p := port
 			srv.TLSConfig = &tls.Config{
 				MinVersion:     tls.VersionTLS12,
-				GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) { return e.certFor(p, h.ServerName) },
+				NextProtos:     []string{"h2", "http/1.1", "acme-tls/1"},
+				GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) { return e.certFor(p, h) },
 			}
 			ln = tls.NewListener(ln, srv.TLSConfig)
 		}
@@ -282,12 +316,18 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	}
 }
 
-func (e *Engine) certFor(port int, sni string) (*tls.Certificate, error) {
+func (e *Engine) certFor(port int, hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	pr := e.rt.Load().ports[port]
 	if pr == nil {
 		return nil, errors.New("no site on this port")
 	}
-	sni = strings.ToLower(sni)
+	sni := strings.ToLower(hello.ServerName)
+	if s, ok := pr.exact[sni]; ok && s.site.AutoTLS {
+		if cp := e.certProvider(); cp != nil {
+			return cp.GetCertificate(hello)
+		}
+		return nil, errors.New("auto_tls site but ACME is not configured")
+	}
 	if c, ok := pr.certs[sni]; ok {
 		return c, nil
 	}
@@ -374,6 +414,12 @@ func (e *Engine) handler(port int) http.Handler {
 		if pr == nil {
 			http.Error(w, "no site", http.StatusMisdirectedRequest)
 			return
+		}
+		if !pr.tls && strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+			if cp := e.certProvider(); cp != nil {
+				cp.HTTPHandler(http.NotFoundHandler()).ServeHTTP(w, r)
+				return
+			}
 		}
 		s := pr.route(r.Host)
 		if s == nil {
@@ -535,8 +581,8 @@ func matched(tx types.Transaction) ([]events.Rule, []string) {
 	tagSet := map[string]bool{}
 	for _, m := range tx.MatchedRules() {
 		rule := m.Rule()
-		// 90xxxx are CRS initialisation/bookkeeping rules, not findings.
-		if m.Message() == "" || rule.ID() < 910000 {
+		// 900000-909999 are CRS initialisation/bookkeeping rules, not findings.
+		if m.Message() == "" || (rule.ID() >= 900000 && rule.ID() < 910000) {
 			continue
 		}
 		out = append(out, events.Rule{ID: rule.ID(), Msg: m.Message(), Data: truncate(m.Data(), 200), Severity: rule.Severity().String()})

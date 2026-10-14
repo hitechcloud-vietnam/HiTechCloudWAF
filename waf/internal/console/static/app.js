@@ -208,12 +208,15 @@
         field("Cổng", el("input", { id: "f-ports", value: (s.ports || []).join(", ") }), "Ví dụ: 80, 443_ssl (cổng _ssl cần chứng chỉ)."),
         field("Upstream (server gốc)", el("textarea", { id: "f-ups", value: (s.upstreams || []).join("\n") }), "http(s)://ip:port – nhiều dòng = cân bằng tải, tự loại upstream lỗi."),
         field("Chứng chỉ HTTPS", select("f-cert", certOpts, s.cert_id || 0)),
+        el("div", {}, [check("Tự động cấp chứng chỉ Let's Encrypt", "f-auto", s.auto_tls), check("Bật HSTS", "f-hsts", s.hsts),
+          el("div", { class: "hint", text: "Let's Encrypt cần tên miền trỏ về node, cổng 80 mở và acme.enabled trong cấu hình." })]),
         field("Ghi chú", el("input", { id: "f-comment", value: s.comment || "" }))])]),
       el("fieldset", {}, [el("legend", { text: "Phát hiện tấn công (OWASP CRS)" }), el("div", { class: "grid2" }, [
         field("Chế độ", select("f-mode", [["block", "Chặn"], ["monitor", "Giám sát (chỉ ghi log)"], ["off", "Tắt (proxy thuần)"]], s.mode)),
         field("Mức paranoia", select("f-pl", [[1, "1 – Cân bằng (khuyên dùng)"], [2, "2 – Chặt hơn"], [3, "3 – Nghiêm ngặt"], [4, "4 – Rất nghiêm ngặt"]], s.paranoia), "Mức 3–4 dễ chặn nhầm, cần tinh chỉnh."),
         field("Ngưỡng điểm bất thường", el("input", { id: "f-thr", type: "number", min: "1", value: s.anomaly_threshold || 5 })),
-        field("Tắt rule (ID)", el("input", { id: "f-dis", value: (s.disabled_rules || []).join(", ") }), "Dùng khi bị chặn nhầm; ID lấy từ trang Sự kiện.")])]),
+        field("Tắt rule (ID)", el("input", { id: "f-dis", value: (s.disabled_rules || []).join(", ") }), "Dùng khi bị chặn nhầm; ID lấy từ trang Sự kiện.")]),
+        field("Rule tuỳ chỉnh (SecLang)", el("textarea", { id: "f-rules", value: s.custom_rules || "", placeholder: "SecRule ARGS:debug \"@streq 1\" \"id:1001,phase:1,deny,status:403,log,msg:'debug blocked'\"" }), "ID rule 1–99999. Không cho phép Include hay đọc file.")]),
       el("fieldset", {}, [el("legend", { text: "Giới hạn & kiểm soát truy cập" }), el("div", { class: "grid2" }, [
         field("Rate limit: số request", el("input", { id: "f-rl", type: "number", min: "0", value: rl.requests || 0 }), "0 = tắt."),
         field("Trong (giây)", el("input", { id: "f-rlw", type: "number", min: "0", value: rl.window_sec || 60 })),
@@ -249,7 +252,8 @@
         ip_allow: lines(g("f-allow")), ip_deny: lines(g("f-deny")),
         bot_challenge: { enabled: $("f-bot").checked, difficulty: num(g("f-botd"), 16), ttl_sec: num(g("f-bott"), 3600), exclude_paths: lines(g("f-botx")) },
         auth: { enabled: $("f-auth").checked, password_hash: au.password_hash || "", ttl_sec: num(g("f-autht"), 28800), exclude_paths: lines(g("f-authx")) },
-        upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked
+        upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
+        auto_tls: $("f-auto").checked, hsts: $("f-hsts").checked, custom_rules: g("f-rules")
       };
       if (g("f-authp")) body.auth.password = g("f-authp");
       if (body.rate_limit.requests === 0) body.rate_limit = { requests: 0, window_sec: 0, block_sec: 0 };

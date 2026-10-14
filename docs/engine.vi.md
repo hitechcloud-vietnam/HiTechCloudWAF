@@ -35,6 +35,9 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
 | `upstreams` | `http(s)://host:port`, có thể nhiều upstream |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
+| `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
+| `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
+| `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
 
 ### Anti-bot challenge (`bot_challenge`)
 
@@ -69,6 +72,38 @@ phần header, không quét nội dung. Với body JSON/form, engine kiểm tra
 
 Gợi ý: bật `monitor` vài ngày để xem log, thêm `disabled_rules` cho các rule
 chặn nhầm, rồi mới chuyển sang `block`.
+
+### HTTPS tự động (Let's Encrypt)
+
+Bật `acme.enabled` trong `waf.yaml`, rồi bật `auto_tls` cho site có cổng
+`443_ssl`. Engine sẽ:
+
+- tự xin chứng chỉ qua HTTP-01 (cổng 80) hoặc TLS-ALPN-01 (cổng 443), lưu ở
+  `data_dir/acme` và tự gia hạn;
+- chỉ xin chứng chỉ cho đúng tên miền của các site đã bật `auto_tls`, nên kẻ
+  xấu không thể khiến node xin chứng chỉ cho tên miền khác.
+
+Với cluster, Let's Encrypt giới hạn số chứng chỉ trùng lặp mỗi tuần. Từ khoảng
+5 node trở lên, nên dùng chứng chỉ tải lên (`cert_id`) để đồng bộ cho mọi node.
+
+HTTPS hỗ trợ cả HTTP/2.
+
+### Giám sát (Prometheus)
+
+`GET /api/open/metrics`, xác thực bằng Bearer token. Các chỉ số gồm
+`hcw_requests_total`, `hcw_blocked_total`, `hcw_rate_limited_total`,
+`hcw_acl_blocked_total`, `hcw_bot_failed_total`, `hcw_monitored_total` (theo
+từng site), cùng `hcw_sites` và `hcw_uptime_seconds`.
+
+```yaml
+scrape_configs:
+  - job_name: hcw-waf
+    scheme: https
+    tls_config: {insecure_skip_verify: true}
+    authorization: {credentials_file: /etc/prometheus/hcw.token}
+    metrics_path: /api/open/metrics
+    static_configs: [{targets: ["10.0.0.11:9443", "10.0.0.12:9443"]}]
+```
 
 ## Console web quản trị
 

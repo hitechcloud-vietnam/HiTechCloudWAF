@@ -87,6 +87,13 @@ type Site struct {
 	UpstreamInsecure bool `json:"upstream_insecure"`
 	// RedirectHTTPS sends plain-HTTP clients to the https port.
 	RedirectHTTPS bool `json:"redirect_https"`
+	// AutoTLS obtains and renews certificates from Let's Encrypt (ACME) for
+	// the server names; cert_id is then not needed.
+	AutoTLS bool `json:"auto_tls"`
+	// HSTS adds Strict-Transport-Security to HTTPS responses.
+	HSTS bool `json:"hsts"`
+	// CustomRules are extra SecLang rules for this site (after the CRS).
+	CustomRules string `json:"custom_rules"`
 
 	Comment   string    `json:"comment"`
 	CreatedAt time.Time `json:"created_at"`
@@ -143,8 +150,18 @@ func (s *Site) Normalize() error {
 		}
 		hasTLS = hasTLS || t
 	}
-	if hasTLS && s.CertID == 0 {
-		return errors.New("an _ssl port needs cert_id")
+	if hasTLS && s.CertID == 0 && !s.AutoTLS {
+		return errors.New("an _ssl port needs cert_id or auto_tls")
+	}
+	if s.AutoTLS {
+		for _, n := range s.ServerNames {
+			if n == "_" || strings.HasPrefix(n, "*.") {
+				return fmt.Errorf("auto_tls cannot issue certificates for %q (no wildcards or catch-all)", n)
+			}
+		}
+	}
+	if err := checkCustomRules(s.CustomRules); err != nil {
+		return err
 	}
 	if len(s.Upstreams) == 0 {
 		return errors.New("upstreams is required")
@@ -207,6 +224,31 @@ func (s *Site) Normalize() error {
 		return err
 	}
 	return s.Auth.normalize()
+}
+
+// customRuleIDs keeps operator rules apart from the CRS (900000-999999) and
+// engine-internal IDs (100000-199999).
+var ruleIDRe = regexp.MustCompile(`(?i)\bid\s*:\s*'?(\d+)`)
+
+func checkCustomRules(rules string) error {
+	if len(rules) > 64<<10 {
+		return errors.New("custom_rules is larger than 64 KiB")
+	}
+	for _, line := range strings.Split(rules, "\n") {
+		l := strings.ToLower(strings.TrimSpace(line))
+		// Rules come over the API and are replicated between nodes; they must
+		// not read local files.
+		if strings.HasPrefix(l, "include") || strings.Contains(l, "@pmfromfile") || strings.Contains(l, "@ipmatchfromfile") || strings.Contains(l, "@inspectfile") {
+			return errors.New("custom_rules may not include or read files")
+		}
+	}
+	for _, m := range ruleIDRe.FindAllStringSubmatch(rules, -1) {
+		id, _ := strconv.Atoi(m[1])
+		if id < 1 || id >= 100000 {
+			return fmt.Errorf("custom rule id %d must be between 1 and 99999", id)
+		}
+	}
+	return nil
 }
 
 func checkPaths(ps []string) error {

@@ -79,6 +79,12 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 			pr.Out.Header.Set("X-Forwarded-Proto", proto)
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			if v, _ := resp.Request.Context().Value(ctxKey{}).(ctxVal); v.tls && s.site.HSTS {
+				resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			up.downUntil.Store(time.Now().Add(downFor).UnixNano())
 			e.opt.Log.Warn("upstream error", "site", s.site.ID, "upstream", u.String(), "err", err)

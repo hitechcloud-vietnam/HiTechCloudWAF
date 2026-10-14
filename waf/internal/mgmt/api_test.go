@@ -160,3 +160,21 @@ func TestAllowList(t *testing.T) {
 		t.Fatalf("loopback client not in allow list got %d", code)
 	}
 }
+
+func TestMetrics(t *testing.T) {
+	ts, _, st := setup(t)
+	if _, err := st.CreateSite(model.Site{ServerNames: []string{"m.vn"}, Upstreams: []string{"http://1.1.1.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("GET", ts.URL+"/api/open/metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !bytes.Contains(b, []byte("# TYPE hcw_requests_total counter")) || !bytes.Contains(b, []byte("hcw_sites 1")) {
+		t.Fatalf("metrics: %d\n%s", resp.StatusCode, b)
+	}
+}

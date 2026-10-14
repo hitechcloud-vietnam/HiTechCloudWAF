@@ -22,3 +22,10 @@ brand:
   name: HiTechCloud WAF
   color: "#1D4ED8"
   support_url: https://hitechcloud.vn
+
+# Let's Encrypt for sites with "auto_tls": true (needs port 80 reachable
+# for the domain, or TLS-ALPN on the https port).
+acme:
+  enabled: false
+  email: admin@example.vn
+  # directory_url: https://acme-staging-v02.api.letsencrypt.org/directory

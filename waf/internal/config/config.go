@@ -44,6 +44,15 @@ type Config struct {
 	ChallengeSecretFile string      `yaml:"challenge_secret_file"`
 	Brand               proxy.Brand `yaml:"brand"`
 
+	// ACME enables automatic certificates for sites with auto_tls.
+	ACME struct {
+		Enabled bool   `yaml:"enabled"`
+		Email   string `yaml:"email"`
+		// DirectoryURL defaults to Let's Encrypt production. Use
+		// https://acme-staging-v02.api.letsencrypt.org/directory to test.
+		DirectoryURL string `yaml:"directory_url"`
+	} `yaml:"acme"`
+
 	TrustedNets []*net.IPNet `yaml:"-"`
 	APIAllow    []*net.IPNet `yaml:"-"`
 	ExtraRules  string       `yaml:"-"`

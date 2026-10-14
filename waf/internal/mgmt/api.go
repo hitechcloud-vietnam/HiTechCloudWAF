@@ -7,9 +7,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
 )
 
@@ -90,11 +93,17 @@ func (a *API) Handler() http.Handler {
 			return nil, err
 		}
 		s.ID = 0
+		if err := proxy.ValidateRules(s.CustomRules); err != nil {
+			return nil, err
+		}
 		return a.Store.CreateSite(s)
 	}))
 	mux.HandleFunc("PUT /api/open/site", a.write(func(r *http.Request) (any, error) {
 		var s model.Site
 		if err := decode(r, &s); err != nil {
+			return nil, err
+		}
+		if err := proxy.ValidateRules(s.CustomRules); err != nil {
 			return nil, err
 		}
 		return a.Store.UpdateSite(s)
@@ -147,6 +156,7 @@ func (a *API) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
 	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
+	mux.HandleFunc("GET /api/open/metrics", a.metrics)
 	mux.HandleFunc("GET /api/open/brand", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Brand) })
 	mux.HandleFunc("GET /api/open/info", func(w http.ResponseWriter, _ *http.Request) {
 		ok(w, map[string]any{"version": a.Version, "started_at": a.Started, "sites": len(a.Store.Sites()), "certs": len(a.Store.Certs())})
@@ -169,6 +179,42 @@ func (a *API) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// metrics renders counters in the Prometheus text format. Scrape it with
+// authorization: {credentials: <token>} (Bearer).
+func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
+	names := map[int]string{}
+	for _, s := range a.Store.Sites() {
+		names[s.ID] = s.Name
+	}
+	stats := a.Events.Stats()
+	ids := make([]int, 0, len(stats))
+	for id := range stats {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	type metric struct {
+		name, help string
+		get        func(events.Counters) uint64
+	}
+	ms := []metric{
+		{"hcw_requests_total", "Requests received per site.", func(c events.Counters) uint64 { return c.Requests }},
+		{"hcw_blocked_total", "Requests blocked by WAF rules.", func(c events.Counters) uint64 { return c.Blocked }},
+		{"hcw_monitored_total", "Attacks logged in monitor mode.", func(c events.Counters) uint64 { return c.Monitored }},
+		{"hcw_rate_limited_total", "Requests refused by rate limiting.", func(c events.Counters) uint64 { return c.RateLimit }},
+		{"hcw_acl_blocked_total", "Requests refused by IP allow/deny lists.", func(c events.Counters) uint64 { return c.ACL }},
+		{"hcw_bot_failed_total", "Failed anti-bot challenges.", func(c events.Counters) uint64 { return c.Bot }},
+	}
+	for _, m := range ms {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", m.name, m.help, m.name)
+		for _, id := range ids {
+			fmt.Fprintf(w, "%s{site_id=\"%d\",site=%s} %d\n", m.name, id, strconv.Quote(names[id]), m.get(stats[id]))
+		}
+	}
+	fmt.Fprintf(w, "# HELP hcw_sites Configured sites.\n# TYPE hcw_sites gauge\nhcw_sites %d\n", len(names))
+	fmt.Fprintf(w, "# HELP hcw_uptime_seconds Seconds since start.\n# TYPE hcw_uptime_seconds gauge\nhcw_uptime_seconds %d\n", int(time.Since(a.Started).Seconds()))
 }
 
 func (a *API) allowed(remote string) bool {
