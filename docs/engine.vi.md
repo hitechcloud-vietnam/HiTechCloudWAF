@@ -149,6 +149,22 @@ Cách xử lý từng trường hợp:
 
 Mỗi sự kiện tấn công đều ghi kèm mã quốc gia.
 
+### Cảnh báo (Telegram, webhook)
+
+Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
+
+- Sự kiện được gom theo cặp (site, loại). Sự kiện đầu tiên được báo trong vòng
+  khoảng 10 giây; sau đó mỗi `interval` (mặc định 5 phút) gửi tối đa một tin
+  tổng hợp, gồm số sự kiện, top IP và một request mẫu.
+- `kinds` chọn loại cần báo: `waf`, `geo`, `ip_deny`, `ip_allow`,
+  `rate_limit`, `bot`, `auth`. Mặc định chỉ báo `waf`.
+- **Telegram:** tạo bot qua @BotFather, thêm bot vào nhóm, điền `chat_id`.
+- **Webhook:** nhận JSON (`node`, `site`, `kind`, `count`, `top_ips`,
+  `sample`). Header `X-HCW-Signature: sha256=<HMAC-SHA256(secret, body)>` dùng
+  để xác minh tin đến từ WAF.
+- Kiểm tra cấu hình: nút **Gửi thử cảnh báo** trên console, hoặc
+  `POST /api/open/alerts/test`.
+
 ### Giám sát (Prometheus)
 
 `GET /api/open/metrics`, xác thực bằng Bearer token. Các chỉ số gồm

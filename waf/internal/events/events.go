@@ -59,6 +59,16 @@ type Log struct {
 
 	// per-minute totals for the last 60 minutes
 	series [60]Bucket
+
+	observers []func(Event)
+}
+
+// OnAdd registers f to be called (synchronously, outside the lock) for every
+// recorded event. f must not block.
+func (l *Log) OnAdd(f func(Event)) {
+	l.mu.Lock()
+	l.observers = append(l.observers, f)
+	l.mu.Unlock()
 }
 
 // Bucket is one minute of traffic.
@@ -146,6 +156,12 @@ func (l *Log) CountRequest(site int) {
 // Add records e.
 func (l *Log) Add(e Event) {
 	l.mu.Lock()
+	obs := l.observers
+	defer func() {
+		for _, f := range obs {
+			f(e)
+		}
+	}()
 	defer l.mu.Unlock()
 	c := l.counter(e.SiteID)
 	b := l.bucket(e.Time)

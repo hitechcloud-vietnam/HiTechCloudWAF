@@ -29,6 +29,7 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
@@ -81,6 +82,7 @@ func run(path string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var alertSender *alerts.Notifier
 	secret, err := loadSecret(cfg.ChallengeSecretFile, filepath.Join(cfg.DataDir, "challenge.key"))
 	if err != nil {
 		return fmt.Errorf("challenge secret: %w", err)
@@ -131,8 +133,25 @@ func run(path string, log *slog.Logger) error {
 	}
 	log.Info("engine ready", "version", version, "sites", len(st.Sites()), "took", time.Since(start).String())
 
+	if cfg.Alerts.Enabled() {
+		notifier := alerts.New(cfg.Alerts, cfg.NodeName, func(id int) string {
+			for _, s := range st.Sites() {
+				if s.ID == id {
+					return s.Name
+				}
+			}
+			return fmt.Sprintf("site #%d", id)
+		}, log)
+		evlog.OnAdd(notifier.Observe)
+		go notifier.Run(ctx, 10*time.Second)
+		alertSender = notifier
+		log.Info("alerts enabled", "telegram", cfg.Alerts.Telegram.ChatID != "", "webhooks", len(cfg.Alerts.Webhooks))
+	}
 	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log,
 		Brand: cfg.Brand, Version: version, Started: start, Console: console.Handler(), Allow: cfg.APIAllow}
+	if alertSender != nil {
+		api.Alerts = alertSender
+	}
 	crt, key := cfg.API.TLSCert, cfg.API.TLSKey
 	if crt == "" {
 		crt, key = filepath.Join(cfg.DataDir, "api.crt"), filepath.Join(cfg.DataDir, "api.key")

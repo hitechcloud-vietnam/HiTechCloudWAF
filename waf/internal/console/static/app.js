@@ -95,7 +95,10 @@
 
   // ---------- dashboard ----------
   function dashboard(v) {
-    v.appendChild(el("h1", { text: "Tổng quan" }));
+    v.appendChild(el("div", { class: "row" }, [el("h1", { text: "Tổng quan" }), el("span", { class: "spacer" }),
+      el("button", { class: "btn", text: "Gửi thử cảnh báo", onclick: function () {
+        api("POST", "/api/open/alerts/test").then(function () { toast("Đã gửi tin nhắn thử tới Telegram/webhook"); }).catch(function (e) { toast(e.message, true); });
+      } })]));
     var cards = el("div", { class: "cards" });
     var chartCard = el("div", { class: "card" });
     var tableWrap = el("div");

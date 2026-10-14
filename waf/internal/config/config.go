@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 )
@@ -55,6 +56,10 @@ type Config struct {
 		// https://acme-staging-v02.api.letsencrypt.org/directory to test.
 		DirectoryURL string `yaml:"directory_url"`
 	} `yaml:"acme"`
+
+	// NodeName identifies this node in alerts (default: hostname).
+	NodeName string        `yaml:"node_name"`
+	Alerts   alerts.Config `yaml:"alerts"`
 
 	TrustedNets []*net.IPNet `yaml:"-"`
 	APIAllow    []*net.IPNet `yaml:"-"`
@@ -105,6 +110,16 @@ func Load(path string) (*Config, error) {
 			return nil, err
 		}
 		c.APIAllow = append(c.APIAllow, n)
+	}
+	if f := c.Alerts.Telegram.BotTokenFile; f != "" && c.Alerts.Telegram.BotToken == "" {
+		t, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		c.Alerts.Telegram.BotToken = strings.TrimSpace(string(t))
+	}
+	if c.NodeName == "" {
+		c.NodeName, _ = os.Hostname()
 	}
 	if c.ExtraRulesFile != "" {
 		r, err := os.ReadFile(c.ExtraRulesFile)

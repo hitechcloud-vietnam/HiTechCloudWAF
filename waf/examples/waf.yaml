@@ -31,3 +31,17 @@ acme:
   enabled: false
   email: admin@example.vn
   # directory_url: https://acme-staging-v02.api.letsencrypt.org/directory
+
+# Security alerts (Telegram and/or signed webhooks). Events are grouped per
+# site and kind; at most one message per interval.
+# node_name: hn-01
+# alerts:
+#   kinds: [waf, geo, rate_limit, bot, auth]
+#   interval: 5m
+#   include_monitor: false
+#   telegram:
+#     bot_token_file: /etc/hcw-waf/telegram.token   # from @BotFather
+#     chat_id: "-1001234567890"                      # group/channel id
+#   webhooks:
+#     - url: https://hooks.example.vn/waf
+#       secret: change-me                            # X-HCW-Signature: sha256=HMAC(body)

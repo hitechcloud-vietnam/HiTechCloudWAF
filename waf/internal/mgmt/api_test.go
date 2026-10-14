@@ -178,3 +178,10 @@ func TestMetrics(t *testing.T) {
 		t.Fatalf("metrics: %d\n%s", resp.StatusCode, b)
 	}
 }
+
+func TestAlertsTestEndpointWithoutChannels(t *testing.T) {
+	ts, _, _ := setup(t)
+	if code, env := call(t, ts, "POST", "/api/open/alerts/test", nil, token); code != 409 || env.Err == nil {
+		t.Fatalf("got %d", code)
+	}
+}

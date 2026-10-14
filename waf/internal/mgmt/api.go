@@ -4,6 +4,7 @@
 package mgmt
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -38,7 +39,11 @@ type API struct {
 	// Console serves the web UI at /; nil disables it.
 	Console http.Handler
 	// Allow restricts the API and console to these networks (empty = any).
-	Allow  []*net.IPNet
+	Allow []*net.IPNet
+	// Alerts sends notifications; nil when no channel is configured.
+	Alerts interface {
+		SendTest(context.Context) error
+	}
 	Store  *store.Store
 	Events *events.Log
 	Apply  Applier
@@ -157,6 +162,17 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
 	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
 	mux.HandleFunc("GET /api/open/metrics", a.metrics)
+	mux.HandleFunc("POST /api/open/alerts/test", func(w http.ResponseWriter, r *http.Request) {
+		if a.Alerts == nil {
+			fail(w, http.StatusConflict, "not_configured", errors.New("no alert channel configured (alerts.telegram or alerts.webhooks in waf.yaml)"))
+			return
+		}
+		if err := a.Alerts.SendTest(r.Context()); err != nil {
+			fail(w, http.StatusBadGateway, "delivery_failed", err)
+			return
+		}
+		ok(w, "sent")
+	})
 	mux.HandleFunc("GET /api/open/brand", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Brand) })
 	mux.HandleFunc("GET /api/open/info", func(w http.ResponseWriter, _ *http.Request) {
 		ok(w, map[string]any{"version": a.Version, "started_at": a.Started, "sites": len(a.Store.Sites()), "certs": len(a.Store.Certs())})
