@@ -38,6 +38,24 @@ jobs:
           done
           cp scripts/install.sh dist/
           (cd dist && sha256sum * > SHA256SUMS)
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -eu
+          # The section "## vX.Y.Z – date" up to the next "## v" heading.
+          awk -v v="$VERSION" '
+            /^## v/ { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md || echo "See CHANGELOG.md." > release-notes.md
+          {
+            echo
+            echo "---"
+            echo "Install: \`curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${VERSION}/install.sh && sudo bash install.sh node\`"
+            echo
+            echo "Deployment guide: https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/deploy.vi.md"
+          } >> release-notes.md
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -45,4 +63,4 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: HiTechCloud WAF ${{ inputs.version || github.ref_name }}
           files: dist/*
-          generate_release_notes: true
+          body_path: release-notes.md
