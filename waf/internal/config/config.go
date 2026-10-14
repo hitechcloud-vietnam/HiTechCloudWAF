@@ -14,6 +14,7 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/threatintel"
 )
 
 // Config is the node configuration. Sites and certificates are not here:
@@ -65,6 +66,10 @@ type Config struct {
 	// NodeName identifies this node in alerts (default: hostname).
 	NodeName string        `yaml:"node_name"`
 	Alerts   alerts.Config `yaml:"alerts"`
+
+	// ThreatIntel downloads IP reputation lists; sites opt in with
+	// "threat_intel": "block" | "challenge" | "monitor".
+	ThreatIntel threatintel.Config `yaml:"threat_intel"`
 
 	TrustedNets []*net.IPNet `yaml:"-"`
 	APIAllow    []*net.IPNet `yaml:"-"`
@@ -122,6 +127,9 @@ func Load(path string) (*Config, error) {
 			return nil, err
 		}
 		c.Alerts.Telegram.BotToken = strings.TrimSpace(string(t))
+	}
+	if err := c.ThreatIntel.Normalize(); err != nil {
+		return nil, err
 	}
 	if c.NodeName == "" {
 		c.NodeName, _ = os.Hostname()

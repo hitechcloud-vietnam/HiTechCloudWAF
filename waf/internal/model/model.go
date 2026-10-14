@@ -44,6 +44,10 @@ type BotChallenge struct {
 	Difficulty int `json:"difficulty"`
 	// ExcludePaths are path prefixes served without challenge (APIs, webhooks).
 	ExcludePaths []string `json:"exclude_paths"`
+	// AllowVerified lets search engine crawlers (Googlebot, Bingbot, …)
+	// skip the challenge once their address is verified by forward-confirmed
+	// reverse DNS. WAF rules still apply to them.
+	AllowVerified bool `json:"allow_verified"`
 }
 
 // AuthChallenge protects a site with a shared password.
@@ -249,6 +253,9 @@ type Site struct {
 	// CountryDeny always blocks. Needs geoip_db in the node configuration.
 	CountryAllow []string `json:"country_allow"`
 	CountryDeny  []string `json:"country_deny"`
+	// ThreatIntel acts on clients listed by the node's threat_intel feeds:
+	// block, challenge, monitor or off (default).
+	ThreatIntel string `json:"threat_intel"`
 
 	// UpstreamHost overrides the Host header sent upstream (default: keep).
 	UpstreamHost string `json:"upstream_host"`
@@ -426,6 +433,9 @@ func (s *Site) Normalize() error {
 		return err
 	}
 	if err := s.Cache.normalize(); err != nil {
+		return err
+	}
+	if err := normalizeThreatIntel(&s.ThreatIntel); err != nil {
 		return err
 	}
 	return s.Auth.normalize()

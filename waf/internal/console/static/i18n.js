@@ -313,7 +313,27 @@
     "Để trống = mặc định (css, js, ảnh, font).": "Empty = defaults (css, js, images, fonts).",
     "Xoá cache": "Purge cache",
     "Xoá toàn bộ cache của {0}?": "Purge the whole cache of {0}?",
-    "Đã xoá {0} object khỏi cache": "Removed {0} objects from the cache"
+    "Đã xoá {0} object khỏi cache": "Removed {0} objects from the cache",
+
+    // ---- threat intelligence ----
+    "threat-intel": "threat-intel",
+    "IP trong danh sách đe dọa (threat intelligence)": "IPs on threat lists (threat intelligence)",
+    "Bắt giải anti-bot challenge": "Require the anti-bot challenge",
+    "Dùng các nguồn threat_intel.feeds của node (xem trang Hệ thống).": "Uses the node's threat_intel.feeds (see the System page).",
+    "Cho bot tìm kiếm đã xác minh đi qua (Googlebot, Bingbot…)": "Let verified search engine bots through (Googlebot, Bingbot…)",
+    "nguồn: {0}": "feed: {0}",
+    "Nguồn threat intelligence: {0}": "Threat intelligence feed: {0}",
+    "Nguồn threat intelligence (danh sách IP)": "Threat intelligence feeds (IP lists)",
+    "Chưa cấu hình nguồn nào (threat_intel.feeds trong waf.yaml).": "No feeds configured (threat_intel.feeds in waf.yaml).",
+    "bản lưu cục bộ": "local copy",
+    "tải về": "downloaded",
+    "chưa có": "none yet",
+    "Tên": "Name",
+    "Số mục": "Entries",
+    "Đang dùng": "In use",
+    "Cập nhật": "Updated",
+    "Kiểm tra lần cuối": "Last checked",
+    "Trạng thái": "Status"
   };
 
   window.HCWI18n = { base: "vi", langs: LANGS, dict: DICT, missing: {} };

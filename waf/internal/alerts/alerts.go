@@ -30,7 +30,8 @@ import (
 
 // Config is the alerts section of the node configuration.
 type Config struct {
-	// Kinds to report (waf, geo, ip_deny, ip_allow, rate_limit, bot, auth).
+	// Kinds to report (waf, geo, ip_deny, ip_allow, rate_limit, bot, auth,
+	// threat_intel).
 	// Empty means waf only.
 	Kinds []string `yaml:"kinds"`
 	// Interval between two messages for the same site and kind (default 5m).
@@ -239,6 +240,7 @@ func (n *Notifier) Send(ctx context.Context, a Alert) error {
 var kindLabel = map[string]string{
 	"waf": "Tấn công web", "geo": "Chặn theo quốc gia", "ip_deny": "IP trong denylist",
 	"ip_allow": "IP ngoài allowlist", "rate_limit": "Vượt giới hạn tốc độ", "bot": "Bot bị loại", "auth": "Đăng nhập sai",
+	"threat_intel": "IP trong danh sách đe dọa",
 }
 
 // Text renders the human-readable message (Telegram HTML subset).
@@ -269,6 +271,9 @@ func (a Alert) Text() string {
 		}
 		if len(s.Tags) > 0 {
 			fmt.Fprintf(&b, "\nLoại: %s", html.EscapeString(strings.Join(s.Tags, ", ")))
+		}
+		if s.Feed != "" {
+			fmt.Fprintf(&b, "\nNguồn: %s", html.EscapeString(s.Feed))
 		}
 	}
 	return b.String()

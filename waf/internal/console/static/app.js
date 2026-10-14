@@ -273,6 +273,7 @@
         if ((s.ip_allow || []).length) feats.push(t("allowlist"));
         if ((s.ip_deny || []).length) feats.push(t("deny {0}", s.ip_deny.length));
         if ((s.country_allow || []).length || (s.country_deny || []).length) feats.push(t("geo"));
+        if (s.threat_intel && s.threat_intel !== "off") feats.push(t("threat-intel"));
         if (s.dynamic_protection && (s.dynamic_protection.html || s.dynamic_protection.js)) feats.push(t("bảo vệ động"));
         if ((s.rules || []).length) feats.push(s.rules.length === 1 ? t("1 rule") : t("{0} rule", s.rules.length));
         tb.appendChild(el("tr", { class: "click", onclick: function () { location.hash = "#/sites/" + s.id; } }, [
@@ -326,9 +327,11 @@
         field(t("IP cho phép (allowlist)"), el("textarea", { id: "f-allow", value: (s.ip_allow || []).join("\n") }), t("Nếu có, chỉ các IP/CIDR này được truy cập.")),
         field(t("IP chặn (denylist)"), el("textarea", { id: "f-deny", value: (s.ip_deny || []).join("\n") })),
         field(t("Chỉ cho phép quốc gia"), el("input", { id: "f-ca", value: (s.country_allow || []).join(", "), placeholder: "VN" }), t("Mã ISO 2 ký tự, cách nhau dấu phẩy. Cần geoip_db trên node.")),
-        field(t("Chặn quốc gia"), el("input", { id: "f-cd", value: (s.country_deny || []).join(", "), placeholder: "RU, KP" }))])]),
+        field(t("Chặn quốc gia"), el("input", { id: "f-cd", value: (s.country_deny || []).join(", "), placeholder: "RU, KP" })),
+        field(t("IP trong danh sách đe dọa (threat intelligence)"), select("f-ti", [["off", t("Tắt")], ["block", t("Chặn")], ["challenge", t("Bắt giải anti-bot challenge")], ["monitor", t("Giám sát (chỉ ghi log)")]], s.threat_intel || "off"), t("Dùng các nguồn threat_intel.feeds của node (xem trang Hệ thống)."))])]),
       el("fieldset", {}, [el("legend", { text: t("Anti-bot & mật khẩu") }), el("div", { class: "grid2" }, [
         el("div", {}, [check(t("Bật anti-bot challenge (JS proof-of-work)"), "f-bot", bot.enabled),
+          check(t("Cho bot tìm kiếm đã xác minh đi qua (Googlebot, Bingbot…)"), "f-botv", bot.allow_verified),
           field(t("Độ khó"), el("input", { id: "f-botd", type: "number", min: "8", max: "24", value: bot.difficulty || 16 }), t("16 ≈ dưới 1 giây; +1 gấp đôi thời gian.")),
           field(t("Hiệu lực (giây)"), el("input", { id: "f-bott", type: "number", value: bot.ttl_sec || 3600 })),
           field(t("Bỏ qua đường dẫn"), el("textarea", { id: "f-botx", value: (bot.exclude_paths || []).join("\n") }), t("Ví dụ /api/ cho app mobile, webhook."))]),
@@ -371,7 +374,8 @@
         rate_limit: { requests: num(g("f-rl"), 0), window_sec: num(g("f-rlw"), 60), block_sec: num(g("f-rlb"), 60) },
         ip_allow: lines(g("f-allow")), ip_deny: lines(g("f-deny")),
         country_allow: lines(g("f-ca").toUpperCase()), country_deny: lines(g("f-cd").toUpperCase()),
-        bot_challenge: { enabled: $("f-bot").checked, difficulty: num(g("f-botd"), 16), ttl_sec: num(g("f-bott"), 3600), exclude_paths: lines(g("f-botx")) },
+        bot_challenge: { enabled: $("f-bot").checked, allow_verified: $("f-botv").checked, difficulty: num(g("f-botd"), 16), ttl_sec: num(g("f-bott"), 3600), exclude_paths: lines(g("f-botx")) },
+        threat_intel: g("f-ti"),
         auth: { enabled: $("f-auth").checked, password_hash: au.password_hash || "", ttl_sec: num(g("f-autht"), 28800), exclude_paths: lines(g("f-authx")) },
         upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
         dynamic_protection: { html: $("f-dhtml").checked, js: $("f-djs").checked, paths: lines(g("f-dpaths")) },
@@ -503,7 +507,7 @@
             el("td", { text: fmtTime(e.time) }), el("td", { text: siteName(e.site_id) }), el("td", { class: "mono", text: e.client_ip + (e.country ? " · " + e.country : "") }),
             el("td", { class: "mono", text: e.method + " " + e.uri.slice(0, 120) }),
             el("td", {}, [el("span", { class: "pill " + cls, text: e.action === "monitor" ? t("{0} (giám sát)", e.kind) : e.kind })]),
-            el("td", { text: (e.tags || []).join(", ") })]));
+            el("td", { text: e.feed ? t("nguồn: {0}", e.feed) : (e.tags || []).join(", ") })]));
         });
         if (!(d.data || []).length) tb.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "muted", text: t("Chưa có sự kiện.") })]));
         list.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Thời gian"), tc("col", "Ứng dụng"), t("IP"), tc("event", "Request"), t("Loại"), t("Phân loại")].map(th))]), tb])]));
@@ -533,7 +537,7 @@
     }
     box.appendChild(el("div", { class: "card" }, [
       el("div", { class: "row" }, [el("b", { text: t("Sự kiện {0}", e.id) }), el("span", { class: "spacer" }), el("button", { class: "btn ghost small", text: t("Đóng"), onclick: function () { clear(box); } })]),
-      el("p", { class: "mono detail", text: e.method + " " + e.host + e.uri + "\nIP: " + e.client_ip + (e.country ? " (" + e.country + ")" : "") + "\nUser-Agent: " + (e.user_agent || "") + "\nHTTP " + e.status + " · " + fmtTime(e.time) }),
+      el("p", { class: "mono detail", text: e.method + " " + e.host + e.uri + "\nIP: " + e.client_ip + (e.country ? " (" + e.country + ")" : "") + "\nUser-Agent: " + (e.user_agent || "") + (e.feed ? "\n" + t("Nguồn threat intelligence: {0}", e.feed) : "") + "\nHTTP " + e.status + " · " + fmtTime(e.time) }),
       (e.rules || []).length ? el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Rule"), t("Mô tả"), t("Dữ liệu khớp"), t("Mức độ")].map(th))]), rules])]) : null,
       el("div", { class: "spacer" }), actions
     ]));
@@ -652,6 +656,7 @@
           };
           rd.readAsText(f);
         } })])]));
+    threatIntelStatus(v);
     v.appendChild(el("h2", { text: t("Nhật ký thao tác") }));
     var box = el("div"); v.appendChild(box);
     api("GET", "/api/open/audit?limit=300").then(function (d) {
@@ -665,6 +670,24 @@
       });
       if (!(d.data || []).length) tb.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "muted", text: t("Chưa có thao tác nào.") })]));
       box.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Thời gian"), tc("col", "Người dùng"), t("IP"), t("Thao tác"), t("Kết quả"), t("Chi tiết")].map(th))]), tb])]));
+    }, function (x) { toast(x.message, true); });
+  }
+
+  function threatIntelStatus(v) {
+    var box = el("fieldset", {}, [el("legend", { text: t("Nguồn threat intelligence (danh sách IP)") })]);
+    v.appendChild(box);
+    api("GET", "/api/open/threatintel").then(function (d) {
+      var feeds = (d && d.feeds) || [];
+      if (!feeds.length) { box.appendChild(el("p", { class: "muted", text: t("Chưa cấu hình nguồn nào (threat_intel.feeds trong waf.yaml).") })); return; }
+      var tb = el("tbody");
+      feeds.forEach(function (f) {
+        var src = f.source === "cache" ? t("bản lưu cục bộ") : f.source === "download" ? t("tải về") : t("chưa có");
+        tb.appendChild(el("tr", {}, [el("td", { class: "nowrap", text: f.name }), el("td", { class: "mono", text: f.url }),
+          el("td", { text: String(f.entries) }), el("td", { text: src }),
+          el("td", { class: "nowrap", text: f.updated_at ? fmtTime(f.updated_at) : "—" }), el("td", { class: "nowrap", text: f.checked_at ? fmtTime(f.checked_at) : "—" }),
+          el("td", {}, [f.last_error ? el("span", { class: "pill bad", text: f.last_error }) : el("span", { class: "pill ok", text: "OK" })])]));
+      });
+      box.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Tên"), "URL", t("Số mục"), t("Đang dùng"), t("Cập nhật"), t("Kiểm tra lần cuối"), t("Trạng thái")].map(th))]), tb])]));
     }, function (x) { toast(x.message, true); });
   }
 

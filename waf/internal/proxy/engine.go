@@ -48,6 +48,11 @@ type Options struct {
 	CacheMB int
 	Log     *slog.Logger
 	Events  *events.Log
+
+	// ThreatIntel feeds for sites with threat_intel; GoodBots verifies
+	// crawlers for bot_challenge.allow_verified (both optional).
+	ThreatIntel ThreatIntel
+	GoodBots    GoodBots
 }
 
 type upstream struct {
@@ -752,6 +757,13 @@ rules:
 		}
 	}
 
+	tiFeed, cont := "", true
+	if !allowed {
+		if tiFeed, cont = e.threatIntel(w, r, s, ip); !cont {
+			return
+		}
+	}
+
 	if rl := s.site.RateLimit; rl.Requests > 0 && !allowed {
 		key := strconv.Itoa(s.site.ID) + "|" + ipKey(ip)
 		if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
@@ -763,7 +775,7 @@ rules:
 	if e.handleEngineEndpoint(w, r, s, ip, isTLS) {
 		return
 	}
-	if !allowed && !e.challenges(w, r, s, ip) {
+	if !allowed && !e.challenges(w, r, s, ip, tiFeed) {
 		return
 	}
 

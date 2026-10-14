@@ -21,10 +21,13 @@ type Event struct {
 	Method   string    `json:"method"`
 	URI      string    `json:"uri"`
 	UA       string    `json:"user_agent"`
-	// Kind is waf, rate_limit, ip_deny or ip_allow.
+	// Kind is waf, rate_limit, ip_deny, ip_allow, geo, rule, bot, auth or
+	// threat_intel.
 	Kind string `json:"kind"`
-	// Action is block or monitor.
-	Action string   `json:"action"`
+	// Action is block, monitor or (threat_intel only) challenge.
+	Action string `json:"action"`
+	// Feed names the threat-intelligence list of a threat_intel event.
+	Feed   string   `json:"feed,omitempty"`
 	Status int      `json:"status"`
 	Rules  []Rule   `json:"rules,omitempty"`
 	Tags   []string `json:"tags,omitempty"`
@@ -169,7 +172,8 @@ func (l *Log) Add(e Event) {
 	case e.Kind == "rate_limit":
 		c.RateLimit++
 		b.RateLimit++
-	case e.Kind == "ip_deny" || e.Kind == "ip_allow" || e.Kind == "geo" || e.Kind == "rule":
+	case e.Kind == "ip_deny" || e.Kind == "ip_allow" || e.Kind == "geo" || e.Kind == "rule" ||
+		(e.Kind == "threat_intel" && e.Action != "monitor"):
 		c.ACL++
 		b.ACL++
 	case e.Kind == "bot":
