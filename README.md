@@ -67,9 +67,13 @@ Lộ trình (chưa có): mã hóa HTML/JS động.
 
 ## Bắt đầu
 
-1. Mỗi node: `waf/deploy/compose.yaml` (engine HiTechCloud + agent).
-2. Control plane & DNS: [docs/cluster.vi.md](docs/cluster.vi.md), dùng
-   `cluster/examples/controller-hcw-engine.yaml`.
+```bash
+curl -fsSLO https://github.com/hitechcloud-vietnam/HiTechCloudWAF/releases/latest/download/install.sh
+sudo bash install.sh node            # một node WAF + console
+```
+
+Cluster nhiều node, DNS và Docker: [docs/install.vi.md](docs/install.vi.md),
+kiến trúc ở [docs/cluster.vi.md](docs/cluster.vi.md).
 
 ## Giấy phép
 
