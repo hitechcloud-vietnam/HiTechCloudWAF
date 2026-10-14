@@ -1,0 +1,51 @@
+# HiTechCloud WAF – cluster controller (control plane)
+controller:
+  listen: ":7443"
+  tls_cert: /etc/hcw/tls/controller.crt
+  tls_key: /etc/hcw/tls/controller.key
+  state_file: /var/lib/hcw/controller-state.json
+
+  # Generate each with: hcw token > /etc/hcw/secrets/<name>.token
+  admin_token_file: /etc/hcw/secrets/admin.token   # dashboard + admin API
+  node_token_file: /etc/hcw/secrets/node.token     # agents (heartbeat, config)
+  dns_token_file: /etc/hcw/secrets/dns.token       # DNS servers (read pools)
+
+  heartbeat_timeout: 30s
+  probe_interval: 10s
+  probe_timeout: 3s
+  probe_insecure: true      # nodes are probed by IP; certificate names will not match
+  forget_after: 0s          # 0 = never forget silent nodes automatically
+
+  # Engine whose configuration is replicated to every node. Usually the WAF
+  # console on the control-plane host. Remove base_url to disable replication.
+  primary:
+    base_url: https://127.0.0.1:9443
+    token_file: /etc/hcw/secrets/primary-engine.token   # API token from the console
+    insecure_skip_verify: true                           # loopback only
+    # IMPORTANT: verify the paths/fields below against the API docs of the
+    # engine version you run before enabling prune.
+    resources:
+      - name: cert
+        path: /api/open/cert
+        list_query: "page=1&page_size=1000"
+        items_path: data.data
+        key_fields: [domains]
+        ignore_fields: [created_at, updated_at, related_sites]
+        prune: false
+      - name: site
+        path: /api/open/site
+        list_query: "page=1&page_size=1000"
+        items_path: data.data
+        key_fields: [server_names, ports]
+        ignore_fields: [created_at, updated_at, req_cnt, attack_cnt, health_state]
+        refs:
+          cert_id: cert
+        prune: false
+  sync_interval: 30s
+
+  # White label for the cluster dashboard
+  brand:
+    name: HiTechCloud WAF
+    primary_color: "#1D4ED8"
+    logo_url: ""
+    support_url: https://hitechcloud.vn

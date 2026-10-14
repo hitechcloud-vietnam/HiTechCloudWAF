@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Name}} – Cluster</title>
+<style>
+  :root { --brand: {{.PrimaryColor}}; --bg:#f8fafc; --card:#fff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --ok:#16a34a; --bad:#dc2626; --warn:#d97706; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b1220; --card:#111a2e; --text:#e2e8f0; --muted:#94a3b8; --line:#1e293b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: Inter, "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; background:var(--card); border-bottom:1px solid var(--line); }
+  header img { height:32px; }
+  header h1 { font-size:18px; margin:0; }
+  header .sp { flex:1; }
+  main { padding:20px; max-width:1280px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card b { display:block; font-size:24px; margin-top:4px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .wrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+  .pill { padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
+  .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
+  button, input { font:inherit; }
+  button { background:var(--brand); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--brand); border:1px solid var(--brand); }
+  input { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  h2 { font-size:16px; margin:22px 0 10px; }
+  #login { max-width:420px; margin:60px auto; }
+  .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  {{if .LogoURL}}<img src="{{.LogoURL}}" alt="">{{end}}
+  <h1>{{.Name}} · Cluster</h1>
+  <span class="sp"></span>
+  {{if .SupportURL}}<a class="muted" href="{{.SupportURL}}" target="_blank" rel="noopener">Hỗ trợ</a>{{end}}
+  <button class="ghost" id="logout" hidden>Đăng xuất</button>
+</header>
+<main>
+  <div id="login" class="card" hidden>
+    <p>Nhập Admin token của controller:</p>
+    <input id="tok" type="password" style="width:100%" autocomplete="off">
+    <p><button id="go">Đăng nhập</button> <span id="lerr" class="err"></span></p>
+  </div>
+  <div id="app" hidden>
+    <div class="cards">
+      <div class="card"><span class="muted">Tổng node</span><b id="c-total">–</b></div>
+      <div class="card"><span class="muted">Healthy</span><b id="c-ok">–</b></div>
+      <div class="card"><span class="muted">Lỗi</span><b id="c-bad">–</b></div>
+      <div class="card"><span class="muted">Cấu hình (revision)</span><b id="c-rev" style="font-size:16px">–</b><span class="muted" id="c-sync"></span></div>
+    </div>
+    <h2>Nodes <button class="ghost" id="sync">Đồng bộ ngay</button></h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Trạng thái</th><th>Node</th><th>Region</th><th>Pools</th><th>IPv4</th><th>Weight</th><th>Load</th><th>RAM trống</th><th>Probe</th><th>Config</th><th>Heartbeat</th><th></th></tr></thead>
+      <tbody id="nodes"></tbody>
+    </table></div>
+    <h2>DNS pools</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Pool</th><th>Healthy</th><th>Endpoints</th></tr></thead>
+      <tbody id="pools"></tbody>
+    </table></div>
+    <p class="muted" id="err"></p>
+  </div>
+</main>
+<script>
+(function () {
+  var KEY = "hcw-admin-token";
+  function token() { try { return sessionStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
+  function setToken(t) { try { t ? sessionStorage.setItem(KEY, t) : sessionStorage.removeItem(KEY); } catch (e) {} }
+  function $(id) { return document.getElementById(id); }
+  function td(text, cls) { var c = document.createElement("td"); if (cls) { var s = document.createElement("span"); s.className = "pill " + cls; s.textContent = text; c.appendChild(s); } else { c.textContent = text; } return c; }
+  function ago(t) { var s = Math.round((Date.now() - new Date(t)) / 1000); return s < 0 ? "0s" : s < 120 ? s + "s" : Math.round(s / 60) + "m"; }
+  function api(method, path, body) {
+    return fetch(path, { method: method, headers: { "Authorization": "Bearer " + token(), "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { if (r.status === 401) { setToken(""); show(); throw new Error("unauthorized"); } if (!r.ok) { return r.text().then(function (t) { throw new Error(t); }); } return r.status === 204 || r.status === 202 ? null : r.json(); });
+  }
+  function show() { var t = !!token(); $("login").hidden = t; $("app").hidden = !t; $("logout").hidden = !t; }
+  function render(nodes, pools, sync) {
+    var ok = 0, tb = $("nodes"); tb.textContent = "";
+    nodes.forEach(function (n) {
+      if (n.healthy && !n.drain) ok++;
+      var tr = document.createElement("tr");
+      tr.appendChild(n.drain ? td("drain", "warn") : n.healthy ? td("healthy", "ok") : td("down", "bad"));
+      var name = td(n.name + " (" + n.id + ")"); if (n.reason) name.title = n.reason; tr.appendChild(name);
+      tr.appendChild(td(n.region || "–"));
+      tr.appendChild(td((n.pools && n.pools.length ? n.pools : ["default"]).join(", ")));
+      tr.appendChild(td(n.ipv4 + (n.ipv6 ? " / " + n.ipv6 : "")));
+      tr.appendChild(td(String(n.weight_override || n.weight || 100)));
+      tr.appendChild(td(n.stats.load1.toFixed(2) + " / " + n.stats.cpus + " CPU"));
+      tr.appendChild(td(n.stats.mem_avail_mb + " / " + n.stats.mem_total_mb + " MB"));
+      tr.appendChild(n.probe_url ? (n.probe_ok ? td(n.probe_ms + " ms") : td("lỗi", "bad")) : td("–"));
+      var cfg = td(n.config_error ? "lỗi" : (n.config_revision || "–")); if (n.config_error) cfg.title = n.config_error; tr.appendChild(cfg);
+      tr.appendChild(td(ago(n.last_seen)));
+      var act = document.createElement("td");
+      var b = document.createElement("button"); b.className = "ghost"; b.textContent = n.drain ? "Bật lại" : "Drain";
+      b.onclick = function () { api("PATCH", "/v1/nodes/" + encodeURIComponent(n.id), { drain: !n.drain }).then(load).catch(err); };
+      var d = document.createElement("button"); d.className = "ghost"; d.textContent = "Xoá"; d.style.marginLeft = "6px";
+      d.onclick = function () { if (confirm("Xoá node " + n.id + " khỏi cluster?")) api("DELETE", "/v1/nodes/" + encodeURIComponent(n.id)).then(load).catch(err); };
+      act.appendChild(b); act.appendChild(d); tr.appendChild(act);
+      tb.appendChild(tr);
+    });
+    $("c-total").textContent = nodes.length; $("c-ok").textContent = ok; $("c-bad").textContent = nodes.length - ok;
+    $("c-rev").textContent = sync.revision || (sync.enabled ? "chưa có" : "tắt");
+    $("c-sync").textContent = sync.error ? "Lỗi: " + sync.error : (sync.counts ? Object.keys(sync.counts).map(function (k) { return k + ": " + sync.counts[k]; }).join(", ") : "");
+    var pb = $("pools"); pb.textContent = "";
+    pools.forEach(function (p) {
+      var tr = document.createElement("tr"), h = p.endpoints.filter(function (e) { return e.healthy; });
+      tr.appendChild(td(p.pool)); tr.appendChild(td(h.length + " / " + p.endpoints.length));
+      tr.appendChild(td(p.endpoints.map(function (e) { return e.ipv4 + (e.healthy ? "" : " ✕"); }).join(", ")));
+      pb.appendChild(tr);
+    });
+  }
+  function err(e) { $("err").textContent = String(e.message || e); }
+  function load() {
+    if (!token()) return;
+    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync")])
+      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); }).catch(err);
+  }
+  $("go").onclick = function () { setToken($("tok").value.trim()); $("tok").value = ""; show(); load(); };
+  $("tok").onkeydown = function (e) { if (e.key === "Enter") $("go").onclick(); };
+  $("logout").onclick = function () { setToken(""); show(); };
+  $("sync").onclick = function () { api("POST", "/v1/sync").then(function () { setTimeout(load, 1500); }).catch(err); };
+  show(); load(); setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>

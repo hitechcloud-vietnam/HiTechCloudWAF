@@ -1,0 +1,19 @@
+# HiTechCloud WAF – control plane. Run next to the primary WAF engine stack
+# (../../compose.yaml) on the management host.
+services:
+  hcw-controller:
+    image: ${HCW_CLUSTER_IMAGE:-ghcr.io/hitechcloud-vietnam/hitechcloud-waf-cluster:latest}
+    build: ..
+    container_name: hcw-controller
+    command: ["controller", "-config", "/etc/hcw/controller.yaml"]
+    restart: always
+    network_mode: host          # reaches the primary console on 127.0.0.1:9443
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${HCW_ETC:-/etc/hcw}:/etc/hcw:ro
+      - ${HCW_STATE:-/var/lib/hcw}:/var/lib/hcw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O", "/dev/null", "https://127.0.0.1:7443/healthz"]
+      interval: 15s

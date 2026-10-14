@@ -1,0 +1,23 @@
+# HiTechCloud WAF – node agent (runs on every WAF node)
+agent:
+  controller_url: https://controller.example.vn:7443
+  controller_ca: /etc/hcw/tls/ca.crt
+  node_token_file: /etc/hcw/secrets/node.token
+
+  id: waf-hn-01              # defaults to the hostname
+  name: "Hà Nội 01"
+  region: hn                 # used by DNS region preference
+  pools: [web]               # DNS pools this node serves
+  ipv4: 203.0.113.10         # PUBLIC address clients reach (required behind NAT)
+  # ipv6: 2001:db8::10
+  weight: 100
+  probe_url: http://203.0.113.10:80/   # must use this node's ipv4/ipv6
+  data_dir: /var/lib/hcw
+  interval: 10s
+
+  # Local WAF engine console on this node
+  engine:
+    base_url: https://127.0.0.1:9443
+    token_file: /etc/hcw/secrets/local-engine.token
+    insecure_skip_verify: true
+  apply_config: true         # replicate configuration from the primary

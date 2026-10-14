@@ -1,0 +1,25 @@
+# HiTechCloud WAF – authoritative DNS with health-checked answers
+dns:
+  listen: ":53"
+  controller_url: https://controller.example.vn:7443
+  controller_ca: /etc/hcw/tls/ca.crt
+  token_file: /etc/hcw/secrets/dns.token
+  refresh: 5s
+  zones:
+    - name: waf.hitechcloud.vn
+      ns: [ns1.waf.hitechcloud.vn, ns2.waf.hitechcloud.vn]
+      hostmaster: noc.hitechcloud.vn
+      ttl: 30
+      records:
+        - {name: ns1, type: A, value: 203.0.113.53}
+        - {name: ns2, type: A, value: 198.51.100.53}
+        # Customers CNAME their domain to <customer>.waf.hitechcloud.vn
+        - name: edge
+          pool: web
+          max_answers: 2
+          fail_open: true
+          prefer_region:
+            - {cidr: 14.160.0.0/11, region: hn}    # example ISP ranges
+            - {cidr: 113.160.0.0/11, region: hcm}
+        - {name: edge, type: AAAA, pool: web}
+        - {name: customer-a, type: CNAME, value: edge.waf.hitechcloud.vn.}
