@@ -22,10 +22,26 @@ type memLog struct {
 }
 
 func (m *memLog) Log(e accesslog.Entry) { m.mu.Lock(); m.e = append(m.e, e); m.mu.Unlock() }
-func (m *memLog) last() accesslog.Entry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.e[len(m.e)-1]
+
+// next waits for the entry written after the response (the access log is
+// recorded once the handler returns, which can be after the client has
+// read the response).
+func (m *memLog) next(t *testing.T, n int) accesslog.Entry {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		m.mu.Lock()
+		if len(m.e) >= n {
+			e := m.e[n-1]
+			m.mu.Unlock()
+			return e
+		}
+		m.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatalf("access log entry %d never written", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func TestAccessLogActions(t *testing.T) {
@@ -37,19 +53,19 @@ func TestAccessLogActions(t *testing.T) {
 	h.eng.opt.Access = ml
 
 	h.get(t, "a.vn", "/ok?x=1", browser)
-	if e := ml.last(); e.Action != "proxied" || e.Status != 200 || e.SiteID != 1 || e.Bytes == 0 || e.URI != "/ok?x=1" || e.ClientIP != "127.0.0.1" {
+	if e := ml.next(t, 1); e.Action != "proxied" || e.Status != 200 || e.SiteID != 1 || e.Bytes == 0 || e.URI != "/ok?x=1" || e.ClientIP != "127.0.0.1" {
 		t.Fatalf("proxied entry = %+v", e)
 	}
 	h.get(t, "a.vn", "/?id="+url.QueryEscape("1' UNION SELECT password FROM users--"), browser)
-	if e := ml.last(); e.Action != "blocked" || e.Status != 403 || e.EventID == "" {
+	if e := ml.next(t, 2); e.Action != "blocked" || e.Status != 403 || e.EventID == "" {
 		t.Fatalf("blocked entry = %+v", e)
 	}
 	h.get(t, "bot.vn", "/", browser)
-	if e := ml.last(); e.Action != "challenged" || e.SiteID != 2 {
+	if e := ml.next(t, 3); e.Action != "challenged" || e.SiteID != 2 {
 		t.Fatalf("challenge entry = %+v", e)
 	}
 	h.get(t, "nobody.vn", "/", browser)
-	if e := ml.last(); e.Action != "error" || e.Status != 404 {
+	if e := ml.next(t, 4); e.Action != "error" || e.Status != 404 {
 		t.Fatalf("unknown host entry = %+v", e)
 	}
 }
