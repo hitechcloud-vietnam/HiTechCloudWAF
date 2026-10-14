@@ -95,6 +95,7 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			up.downUntil.Store(time.Now().Add(downFor).UnixNano())
+			infoOf(r).set("error")
 			e.opt.Log.Warn("upstream error", "site", s.site.ID, "upstream", u.String(), "err", err)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusBadGateway)

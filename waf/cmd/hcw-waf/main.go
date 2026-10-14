@@ -29,6 +29,7 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/accesslog"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/console"
@@ -109,9 +110,19 @@ func run(path string, log *slog.Logger) error {
 	if geo != nil {
 		geoIface = geo
 	}
+	var access interface{ Log(accesslog.Entry) }
+	if cfg.AccessLog.File != "" {
+		al, err := accesslog.New(cfg.AccessLog)
+		if err != nil {
+			return fmt.Errorf("access_log: %w", err)
+		}
+		defer al.Close()
+		access = al
+	}
 	eng := proxy.New(ctx, proxy.Options{
-		GeoIP: geoIface,
-		Bind:  cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
+		Access: access,
+		GeoIP:  geoIface,
+		Bind:   cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
 		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
 	if cfg.ACME.Enabled {

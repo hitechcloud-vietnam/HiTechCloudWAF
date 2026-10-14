@@ -169,7 +169,7 @@ func (e *Engine) handleEngineEndpoint(w http.ResponseWriter, r *http.Request, s 
 		key := "auth|" + strconv.Itoa(s.site.ID) + "|" + ipKey(ip)
 		// 10 attempts per 10 minutes, then a 15 minute lock.
 		if !e.limiter.allow(key, 10, 10*time.Minute, 15*time.Minute, time.Now()) {
-			e.block(w, e.event(r, s, ip, "auth", "block", http.StatusTooManyRequests))
+			e.block(w, r, e.event(r, s, ip, "auth", "block", http.StatusTooManyRequests))
 			return true
 		}
 		if bcrypt.CompareHashAndPassword([]byte(s.site.Auth.PasswordHash), []byte(r.PostForm.Get("password"))) != nil {
@@ -278,6 +278,7 @@ func pageHeaders(w http.ResponseWriter, status int) {
 }
 
 func (e *Engine) writeBotPage(w http.ResponseWriter, r *http.Request, s *siteRT, ip net.IP) {
+	infoOf(r).set("challenged")
 	pageHeaders(w, http.StatusForbidden)
 	if err := botTmpl.Execute(w, challengePage{Brand: e.opt.Brand, CSS: pageCSS, Nonce: e.newChallenge(s, ip), Difficulty: s.site.Bot.Difficulty, Return: safeReturn(r.URL.RequestURI())}); err != nil {
 		e.opt.Log.Error("render bot page", "err", fmt.Sprint(err))
@@ -285,6 +286,7 @@ func (e *Engine) writeBotPage(w http.ResponseWriter, r *http.Request, s *siteRT,
 }
 
 func (e *Engine) writeAuthPage(w http.ResponseWriter, r *http.Request, s *siteRT, ret string, failed bool) {
+	infoOf(r).set("challenged")
 	pageHeaders(w, http.StatusUnauthorized)
 	if err := authTmpl.Execute(w, challengePage{Brand: e.opt.Brand, CSS: pageCSS, Return: safeReturn(ret), Failed: failed}); err != nil {
 		e.opt.Log.Error("render auth page", "err", fmt.Sprint(err))

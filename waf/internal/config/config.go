@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/accesslog"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/alerts"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
@@ -56,6 +57,9 @@ type Config struct {
 		// https://acme-staging-v02.api.letsencrypt.org/directory to test.
 		DirectoryURL string `yaml:"directory_url"`
 	} `yaml:"acme"`
+
+	// AccessLog writes one JSON line per request (empty file = off).
+	AccessLog accesslog.Config `yaml:"access_log"`
 
 	// NodeName identifies this node in alerts (default: hostname).
 	NodeName string        `yaml:"node_name"`

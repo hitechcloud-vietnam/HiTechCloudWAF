@@ -23,6 +23,7 @@ import (
 	"github.com/corazawaf/coraza/v3"
 	"github.com/corazawaf/coraza/v3/types"
 
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/accesslog"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/events"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 )
@@ -37,6 +38,8 @@ type Options struct {
 	// Secret signs challenge cookies. Nodes behind the same DNS name should
 	// share it so a visitor keeps their pass when moved between nodes.
 	Secret []byte
+	// Access receives one entry per request (optional).
+	Access interface{ Log(accesslog.Entry) }
 	// GeoIP resolves countries for country_allow/deny and events (optional).
 	GeoIP  interface{ Country(net.IP) string }
 	Log    *slog.Logger
@@ -439,26 +442,113 @@ func (e *Engine) clientIP(r *http.Request) net.IP {
 	return ip
 }
 
+// reqInfo collects what the access log needs while a request is served.
+type reqInfo struct {
+	site   int
+	ip     net.IP
+	action string
+	event  string
+}
+
+type infoKey struct{}
+
+func infoOf(r *http.Request) *reqInfo {
+	i, _ := r.Context().Value(infoKey{}).(*reqInfo)
+	return i
+}
+
+func (i *reqInfo) set(action string) {
+	if i != nil {
+		i.action = action
+	}
+}
+
+// statusWriter records the status and size of a response. Unwrap lets
+// http.ResponseController reach Flush and Hijack (streaming, WebSockets).
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (e *Engine) handler(port int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pr := e.rt.Load().ports[port]
-		if pr == nil {
-			http.Error(w, "no site", http.StatusMisdirectedRequest)
+		if e.opt.Access == nil {
+			e.serve(port, w, r, nil)
 			return
 		}
-		if !pr.tls && strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
-			if cp := e.certProvider(); cp != nil {
-				cp.HTTPHandler(http.NotFoundHandler()).ServeHTTP(w, r)
-				return
-			}
+		start := time.Now()
+		info := &reqInfo{action: "proxied"}
+		sw := &statusWriter{ResponseWriter: w}
+		r = r.WithContext(context.WithValue(r.Context(), infoKey{}, info))
+		e.serve(port, sw, r, info)
+		if sw.status == 0 {
+			sw.status = http.StatusOK
 		}
-		s := pr.route(r.Host)
-		if s == nil {
-			http.Error(w, "unknown site", http.StatusNotFound)
-			return
+		ip := info.ip
+		if ip == nil {
+			ip = e.clientIP(r)
 		}
-		e.serveSite(w, r, s, pr.tls)
+		ipStr := ""
+		if ip != nil {
+			ipStr = ip.String()
+		}
+		e.opt.Access.Log(accesslog.Entry{
+			Time: start.UTC(), SiteID: info.site, Host: r.Host, ClientIP: ipStr, Country: e.country(ip),
+			Method: r.Method, URI: r.URL.RequestURI(), Proto: r.Proto, TLS: r.TLS != nil || e.portTLS(port),
+			Status: sw.status, Bytes: sw.bytes, DurationMS: float64(time.Since(start).Microseconds()) / 1000,
+			UserAgent: r.UserAgent(), Referer: r.Referer(), Action: info.action, EventID: info.event,
+		})
 	})
+}
+
+func (e *Engine) portTLS(port int) bool {
+	pr := e.rt.Load().ports[port]
+	return pr != nil && pr.tls
+}
+
+func (e *Engine) serve(port int, w http.ResponseWriter, r *http.Request, info *reqInfo) {
+	pr := e.rt.Load().ports[port]
+	if pr == nil {
+		info.set("error")
+		http.Error(w, "no site", http.StatusMisdirectedRequest)
+		return
+	}
+	if !pr.tls && strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+		if cp := e.certProvider(); cp != nil {
+			info.set("acme")
+			cp.HTTPHandler(http.NotFoundHandler()).ServeHTTP(w, r)
+			return
+		}
+	}
+	s := pr.route(r.Host)
+	if s == nil {
+		info.set("error")
+		http.Error(w, "unknown site", http.StatusNotFound)
+		return
+	}
+	if info != nil {
+		info.site = s.site.ID
+	}
+	e.serveSite(w, r, s, pr.tls)
 }
 
 func (e *Engine) country(ip net.IP) string {
@@ -485,7 +575,10 @@ func hasCode(list []string, c string) bool {
 	return false
 }
 
-func (e *Engine) block(w http.ResponseWriter, ev events.Event) {
+func (e *Engine) block(w http.ResponseWriter, r *http.Request, ev events.Event) {
+	if i := infoOf(r); i != nil {
+		i.action, i.event = "blocked", ev.ID
+	}
 	e.opt.Events.Add(ev)
 	writeBlock(w, e.opt.Brand, ev.Status, ev.ID)
 }
@@ -494,6 +587,9 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 	ip := e.clientIP(r)
 	if ip == nil {
 		ip = net.IPv4zero
+	}
+	if i := infoOf(r); i != nil {
+		i.ip = ip
 	}
 	e.opt.Events.CountRequest(s.site.ID)
 
@@ -505,16 +601,17 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 		if s.httpsPort != 443 {
 			host = net.JoinHostPort(host, strconv.Itoa(s.httpsPort))
 		}
+		infoOf(r).set("redirected")
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
 		return
 	}
 
 	if contains(s.deny, ip) {
-		e.block(w, e.event(r, s, ip, "ip_deny", "block", http.StatusForbidden))
+		e.block(w, r, e.event(r, s, ip, "ip_deny", "block", http.StatusForbidden))
 		return
 	}
 	if len(s.allow) > 0 && !contains(s.allow, ip) {
-		e.block(w, e.event(r, s, ip, "ip_allow", "block", http.StatusForbidden))
+		e.block(w, r, e.event(r, s, ip, "ip_allow", "block", http.StatusForbidden))
 		return
 	}
 	if len(s.site.CountryAllow) > 0 || len(s.site.CountryDeny) > 0 {
@@ -522,7 +619,7 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 		// Unknown countries (private ranges, no database) are not blocked by
 		// a deny list, but are refused by an allow list.
 		if (c != "" && hasCode(s.site.CountryDeny, c)) || (len(s.site.CountryAllow) > 0 && !hasCode(s.site.CountryAllow, c)) {
-			e.block(w, e.event(r, s, ip, "geo", "block", http.StatusForbidden))
+			e.block(w, r, e.event(r, s, ip, "geo", "block", http.StatusForbidden))
 			return
 		}
 	}
@@ -536,7 +633,7 @@ rules:
 		}
 		switch rule.Action {
 		case model.RuleDeny:
-			e.block(w, e.event(r, s, ip, "rule", "block", http.StatusForbidden))
+			e.block(w, r, e.event(r, s, ip, "rule", "block", http.StatusForbidden))
 			return
 		case model.RuleAllow:
 			allowed = true
@@ -547,7 +644,7 @@ rules:
 			rl := rule.RateLimit
 			key := strconv.Itoa(s.site.ID) + "|r" + strconv.Itoa(i) + "|" + ip.String()
 			if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
-				e.block(w, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
+				e.block(w, r, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
 				return
 			}
 		}
@@ -556,7 +653,7 @@ rules:
 	if rl := s.site.RateLimit; rl.Requests > 0 && !allowed {
 		key := strconv.Itoa(s.site.ID) + "|" + ip.String()
 		if !e.limiter.allow(key, rl.Requests, time.Duration(rl.WindowSec)*time.Second, time.Duration(rl.BlockSec)*time.Second, time.Now()) {
-			e.block(w, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
+			e.block(w, r, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
 			return
 		}
 	}
@@ -587,7 +684,7 @@ rules:
 			}
 			ev := e.event(r, s, ip, "waf", "block", status)
 			ev.Rules, ev.Tags = matched(tx)
-			e.block(w, ev)
+			e.block(w, r, ev)
 			return
 		}
 		if s.site.Mode == model.ModeMonitor {

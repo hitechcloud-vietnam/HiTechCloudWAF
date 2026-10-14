@@ -191,6 +191,25 @@ Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
 - Kiểm tra cấu hình: nút **Gửi thử cảnh báo** trên console, hoặc
   `POST /api/open/alerts/test`.
 
+### Access log
+
+```yaml
+access_log:
+  file: /var/lib/hcw-waf/access.log
+  max_size_mb: 100   # xoay vòng sang access.log.1 … .N
+  max_files: 5
+```
+
+Mỗi request ghi một dòng JSON gồm các trường: `time`, `site_id`, `host`,
+`client_ip`, `country`, `method`, `uri`, `proto`, `tls`, `status`, `bytes`,
+`duration_ms`, `user_agent`, `referer`, `action` và `event_id` (khi bị chặn).
+`action` nhận một trong các giá trị: `proxied`, `blocked`, `challenged`,
+`redirected`, `error`, `acme`.
+
+Log được ghi bất đồng bộ nên không làm chậm traffic; nếu đĩa ghi không kịp, dòng
+log bị bỏ thay vì làm chậm request. Định dạng JSON đọc được ngay bằng
+Filebeat/Vector/Loki.
+
 ### Giám sát (Prometheus)
 
 `GET /api/open/metrics`, xác thực bằng Bearer token. Các chỉ số gồm
