@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Protection modes of a site.
@@ -30,6 +32,29 @@ type RateLimit struct {
 	WindowSec int `json:"window_sec"`
 	// BlockSec is how long a client stays blocked after exceeding the limit.
 	BlockSec int `json:"block_sec"`
+}
+
+// BotChallenge makes browsers solve a JavaScript proof-of-work before they
+// reach the site. Scripts and simple bots without a JS engine fail it.
+type BotChallenge struct {
+	Enabled bool `json:"enabled"`
+	// TTLSec is how long a solved challenge stays valid (default 3600).
+	TTLSec int `json:"ttl_sec"`
+	// Difficulty in leading zero bits of SHA-256 (default 16 ≈ 65k hashes,
+	// under a second on phones; each +1 doubles the work).
+	Difficulty int `json:"difficulty"`
+	// ExcludePaths are path prefixes served without challenge (APIs, webhooks).
+	ExcludePaths []string `json:"exclude_paths"`
+}
+
+// AuthChallenge protects a site with a shared password.
+type AuthChallenge struct {
+	Enabled bool `json:"enabled"`
+	// Password is write-only: it is hashed into PasswordHash on save.
+	Password     string   `json:"password,omitempty"`
+	PasswordHash string   `json:"password_hash"`
+	TTLSec       int      `json:"ttl_sec"`
+	ExcludePaths []string `json:"exclude_paths"`
 }
 
 // Site is one protected application.
@@ -49,7 +74,9 @@ type Site struct {
 	// DisabledRules are CRS rule IDs removed for this site (false positives).
 	DisabledRules []int `json:"disabled_rules"`
 
-	RateLimit RateLimit `json:"rate_limit"`
+	RateLimit RateLimit     `json:"rate_limit"`
+	Bot       BotChallenge  `json:"bot_challenge"`
+	Auth      AuthChallenge `json:"auth"`
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
 	IPDeny  []string `json:"ip_deny"`
@@ -176,7 +203,63 @@ func (s *Site) Normalize() error {
 	if s.Name == "" {
 		s.Name = s.ServerNames[0]
 	}
+	if err := s.Bot.normalize(); err != nil {
+		return err
+	}
+	return s.Auth.normalize()
+}
+
+func checkPaths(ps []string) error {
+	for _, p := range ps {
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("exclude path %q must start with /", p)
+		}
+	}
 	return nil
+}
+
+func (b *BotChallenge) normalize() error {
+	if b.TTLSec == 0 {
+		b.TTLSec = 3600
+	}
+	if b.Difficulty == 0 {
+		b.Difficulty = 16
+	}
+	if b.TTLSec < 60 || b.TTLSec > 30*86400 {
+		return errors.New("bot_challenge.ttl_sec must be 60..2592000")
+	}
+	if b.Difficulty < 8 || b.Difficulty > 24 {
+		return errors.New("bot_challenge.difficulty must be 8..24")
+	}
+	return checkPaths(b.ExcludePaths)
+}
+
+func (a *AuthChallenge) normalize() error {
+	if a.TTLSec == 0 {
+		a.TTLSec = 8 * 3600
+	}
+	if a.TTLSec < 60 || a.TTLSec > 30*86400 {
+		return errors.New("auth.ttl_sec must be 60..2592000")
+	}
+	if a.Password != "" {
+		if len(a.Password) < 8 || len(a.Password) > 72 {
+			return errors.New("auth.password must be 8..72 characters")
+		}
+		h, err := bcrypt.GenerateFromPassword([]byte(a.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		a.PasswordHash, a.Password = string(h), ""
+	}
+	if a.PasswordHash != "" {
+		if _, err := bcrypt.Cost([]byte(a.PasswordHash)); err != nil {
+			return errors.New("auth.password_hash is not a bcrypt hash")
+		}
+	}
+	if a.Enabled && a.PasswordHash == "" {
+		return errors.New("auth.enabled needs auth.password")
+	}
+	return checkPaths(a.ExcludePaths)
 }
 
 // ParseCIDR accepts a CIDR or a single address.

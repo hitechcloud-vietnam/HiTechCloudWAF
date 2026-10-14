@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	crand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -33,8 +34,11 @@ type Options struct {
 	TrustedProxies []*net.IPNet
 	Brand          Brand
 	ExtraRules     string
-	Log            *slog.Logger
-	Events         *events.Log
+	// Secret signs challenge cookies. Nodes behind the same DNS name should
+	// share it so a visitor keeps their pass when moved between nodes.
+	Secret []byte
+	Log    *slog.Logger
+	Events *events.Log
 }
 
 type upstream struct {
@@ -99,6 +103,10 @@ func New(ctx context.Context, opt Options) *Engine {
 	}
 	if opt.Brand.Color == "" {
 		opt.Brand.Color = "#1D4ED8"
+	}
+	if len(opt.Secret) == 0 {
+		opt.Secret = make([]byte, 32)
+		_, _ = crand.Read(opt.Secret)
 	}
 	e := &Engine{opt: opt, pool: NewWAFPool(opt.ExtraRules), limiter: newLimiter(), listeners: map[int]*listener{}, ctx: ctx}
 	e.rt.Store(&runtime{ports: map[int]*portRT{}})
@@ -422,6 +430,13 @@ func (e *Engine) serveSite(w http.ResponseWriter, r *http.Request, s *siteRT, is
 			e.block(w, e.event(r, s, ip, "rate_limit", "block", http.StatusTooManyRequests))
 			return
 		}
+	}
+
+	if e.handleEngineEndpoint(w, r, s, ip, isTLS) {
+		return
+	}
+	if !e.challenges(w, r, s, ip) {
+		return
 	}
 
 	if s.waf != nil {

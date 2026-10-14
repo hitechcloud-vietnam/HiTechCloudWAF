@@ -11,6 +11,8 @@ body_limit_kb: 1024               # request body bytes inspected
 trusted_proxies: []               # load balancers in front, e.g. [10.0.0.0/8]
 events_kept: 5000                 # in-memory attack events (API /api/open/events)
 events_file: /var/lib/hcw-waf/events.jsonl
+# Shared by all nodes behind one DNS name (generate: hcw token > file):
+# challenge_secret_file: /etc/hcw-waf/challenge.key
 # extra_rules_file: /etc/hcw-waf/custom.conf   # your own SecLang rules
 
 brand:

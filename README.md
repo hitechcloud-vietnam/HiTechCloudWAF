@@ -27,11 +27,11 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - ACL IP allow/deny (CIDR).
 - TLS nhiều chứng chỉ theo SNI, redirect HTTPS.
 - Reverse proxy nhiều upstream có failover.
+- Anti-bot challenge (JS proof-of-work) và auth challenge (mật khẩu, chống brute force).
 - Trang chặn whitelabel kèm Event ID.
 - Log sự kiện tấn công và API quản trị.
 
-Lộ trình (chưa có trong engine HiTechCloud): anti-bot challenge, auth
-challenge, mã hóa HTML/JS động, console web quản trị.
+Lộ trình (chưa có): console web quản trị, mã hóa HTML/JS động.
 
 **Cluster & DNS** (`cluster/`, viết mới):
 

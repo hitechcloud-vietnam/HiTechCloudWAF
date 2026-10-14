@@ -12,6 +12,8 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ redirect HTTPS (tuỳ chọn)
           ├─ ACL IP: ip_deny → 403, ip_allow (nếu có) → 403
           ├─ Rate limit theo IP/site → 429 + thời gian chặn
+          ├─ Auth challenge (mật khẩu) → trang đăng nhập
+          ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
           └─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
@@ -33,6 +35,33 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `ports` | `"80"`, `"443_ssl"` (cổng `_ssl` bắt buộc có `cert_id`) |
 | `upstreams` | `http(s)://host:port`, có thể nhiều upstream |
 | `upstream_host`, `upstream_insecure`, `redirect_https` | Tuỳ chọn proxy |
+
+### Anti-bot challenge (`bot_challenge`)
+
+`{"enabled": true, "difficulty": 16, "ttl_sec": 3600, "exclude_paths": ["/api/"]}`
+
+Trình duyệt phải giải một bài toán SHA-256 proof-of-work bằng JavaScript.
+Đo trên Chromium với độ khó 16: 140–575 ms. Giải xong, trình duyệt nhận
+cookie `hcw_bot` (HttpOnly, ký HMAC, gắn với site và IP; với IPv6 là gắn với
+dải /64). Script, curl và bot không có JS engine sẽ bị chặn lại. Nonce chỉ
+dùng được trong 5 phút, đúng site, đúng IP.
+
+Dùng `exclude_paths` cho API, webhook và app mobile, vì các client này không
+chạy được JS.
+
+### Auth challenge (`auth`)
+
+`{"enabled": true, "password": "…", "ttl_sec": 28800, "exclude_paths": []}`
+
+- Mật khẩu được băm bcrypt ngay khi lưu; API chỉ trả về `password_hash`.
+- Đổi mật khẩu thì mọi phiên đăng nhập cũ hết hiệu lực.
+- Sai 10 lần trong 10 phút thì bị khoá 15 phút.
+- Đăng xuất: `/.hcw/logout`.
+
+Đường dẫn `/.hcw/` được engine dành riêng trên mọi site.
+
+**Cluster:** đặt cùng một `challenge_secret_file` trên tất cả node. Khi DNS
+chuyển khách sang node khác, khách không phải giải lại challenge.
 
 Body nhị phân (octet-stream, ảnh, video, zip, pdf, gRPC) chỉ được kiểm tra
 phần header, không quét nội dung. Với body JSON/form, engine kiểm tra

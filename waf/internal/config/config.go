@@ -31,12 +31,16 @@ type Config struct {
 		TLSKey  string `yaml:"tls_key"`
 	} `yaml:"api"`
 
-	BodyLimitKB    int         `yaml:"body_limit_kb"`
-	TrustedProxies []string    `yaml:"trusted_proxies"`
-	EventsKept     int         `yaml:"events_kept"`
-	EventsFile     string      `yaml:"events_file"`
-	ExtraRulesFile string      `yaml:"extra_rules_file"`
-	Brand          proxy.Brand `yaml:"brand"`
+	BodyLimitKB    int      `yaml:"body_limit_kb"`
+	TrustedProxies []string `yaml:"trusted_proxies"`
+	EventsKept     int      `yaml:"events_kept"`
+	EventsFile     string   `yaml:"events_file"`
+	ExtraRulesFile string   `yaml:"extra_rules_file"`
+	// ChallengeSecretFile signs bot/auth passes. Give every node behind the
+	// same DNS name the same file. Default: <data_dir>/challenge.key,
+	// generated on first start.
+	ChallengeSecretFile string      `yaml:"challenge_secret_file"`
+	Brand               proxy.Brand `yaml:"brand"`
 
 	TrustedNets []*net.IPNet `yaml:"-"`
 	ExtraRules  string       `yaml:"-"`

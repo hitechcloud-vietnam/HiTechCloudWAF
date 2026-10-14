@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -75,9 +76,13 @@ func run(path string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	secret, err := loadSecret(cfg.ChallengeSecretFile, filepath.Join(cfg.DataDir, "challenge.key"))
+	if err != nil {
+		return fmt.Errorf("challenge secret: %w", err)
+	}
 	eng := proxy.New(ctx, proxy.Options{
 		Bind: cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
-		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Log: log, Events: evlog,
+		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
 	start := time.Now()
 	if err := eng.Apply(st.Sites(), st.Certs()); err != nil {
@@ -110,6 +115,31 @@ func run(path string, log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// loadSecret reads the configured secret file, or creates a random one at
+// fallback so challenge passes survive restarts.
+func loadSecret(configured, fallback string) ([]byte, error) {
+	if configured != "" {
+		b, err := os.ReadFile(configured)
+		if err != nil {
+			return nil, err
+		}
+		b = []byte(strings.TrimSpace(string(b)))
+		if len(b) < 32 {
+			return nil, fmt.Errorf("%s must hold at least 32 characters", configured)
+		}
+		return b, nil
+	}
+	if b, err := os.ReadFile(fallback); err == nil && len(b) >= 32 {
+		return b, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	s := []byte(fmt.Sprintf("%x", b))
+	return s, os.WriteFile(fallback, s, 0o600)
 }
 
 // ensureSelfSigned creates a certificate for the local management API.
