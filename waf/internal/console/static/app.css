@@ -84,3 +84,14 @@ body.viewer .admin-only { display: none !important; }
 .qr { width: 200px; height: 200px; image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 8px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
 .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+
+/* language switch (sidebar footer and login card) */
+.lang-switch { display: inline-flex; border: 1px solid rgba(127,127,127,.4); border-radius: 8px; overflow: hidden; }
+.lang-switch button { font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .03em; background: transparent; color: inherit; border: 0; padding: 4px 10px; margin: 0; cursor: pointer; }
+.lang-switch button + button { border-left: 1px solid rgba(127,127,127,.4); }
+.lang-switch button:hover { background: rgba(127,127,127,.12); }
+.lang-switch button.active { background: var(--brand); color: #fff; cursor: default; }
+.lang-switch button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.login-lang { margin-top: 14px; color: var(--muted); }
+.login-card .login-lang button { margin-top: 0; }
+.side-foot .row { gap: 8px; }

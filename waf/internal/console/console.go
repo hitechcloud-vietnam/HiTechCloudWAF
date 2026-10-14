@@ -19,7 +19,7 @@ func Handler() http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if r.URL.Path != "/" && r.URL.Path != "/app.js" && r.URL.Path != "/app.css" && r.URL.Path != "/logo.svg" && r.URL.Path != "/mark.svg" {
+		if r.URL.Path != "/" && r.URL.Path != "/app.js" && r.URL.Path != "/i18n.js" && r.URL.Path != "/app.css" && r.URL.Path != "/logo.svg" && r.URL.Path != "/mark.svg" {
 			r.URL.Path = "/" // single page app
 		}
 		fileServer.ServeHTTP(w, r)

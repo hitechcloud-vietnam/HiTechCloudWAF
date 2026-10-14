@@ -13,17 +13,18 @@
     <img src="/logo.svg" alt="" class="login-logo">
     <h1 class="brand-name">HiTechCloud WAF</h1>
     <div id="login-user">
-      <input id="username" placeholder="Tên đăng nhập" autocomplete="username">
-      <input id="password" type="password" placeholder="Mật khẩu" autocomplete="current-password">
-      <input id="otp" inputmode="numeric" maxlength="6" placeholder="Mã xác thực 2 lớp (6 số)" autocomplete="one-time-code" hidden>
+      <input id="username" placeholder="Tên đăng nhập" data-i18n-placeholder="Tên đăng nhập" autocomplete="username">
+      <input id="password" type="password" placeholder="Mật khẩu" data-i18n-placeholder="Mật khẩu" autocomplete="current-password">
+      <input id="otp" inputmode="numeric" maxlength="6" placeholder="Mã xác thực 2 lớp (6 số)" data-i18n-placeholder="Mã xác thực 2 lớp (6 số)" autocomplete="one-time-code" hidden>
     </div>
     <div id="login-token" hidden>
-      <p class="muted">Nhập API token của node.</p>
+      <p class="muted" data-i18n="Nhập API token của node.">Nhập API token của node.</p>
       <input id="token" type="password" placeholder="API token" autocomplete="off">
     </div>
-    <button type="submit" class="btn primary block">Đăng nhập</button>
+    <button type="submit" class="btn primary block" data-i18n="Đăng nhập">Đăng nhập</button>
     <p id="login-err" class="err"></p>
     <a href="#" id="login-mode" class="small-link">Dùng API token</a>
+    <div class="login-lang"><div class="lang-switch"></div></div>
   </form>
 </div>
 
@@ -31,23 +32,24 @@
   <aside class="side">
     <div class="side-brand"><img src="/mark.svg" alt=""><span class="brand-name">HiTechCloud WAF</span></div>
     <nav>
-      <a href="#/dashboard" data-nav="dashboard">Tổng quan</a>
-      <a href="#/sites" data-nav="sites">Ứng dụng</a>
-      <a href="#/events" data-nav="events">Sự kiện tấn công</a>
-      <a href="#/certs" data-nav="certs">Chứng chỉ</a>
-      <a href="#/users" data-nav="users" class="admin-only">Người dùng</a>
-      <a href="#/system" data-nav="system" class="admin-only">Hệ thống</a>
-      <a href="#/account" data-nav="account">Tài khoản</a>
+      <a href="#/dashboard" data-nav="dashboard" data-i18n="Tổng quan">Tổng quan</a>
+      <a href="#/sites" data-nav="sites" data-i18n="Ứng dụng">Ứng dụng</a>
+      <a href="#/events" data-nav="events" data-i18n="Sự kiện tấn công">Sự kiện tấn công</a>
+      <a href="#/certs" data-nav="certs" data-i18n="Chứng chỉ">Chứng chỉ</a>
+      <a href="#/users" data-nav="users" class="admin-only" data-i18n="Người dùng">Người dùng</a>
+      <a href="#/system" data-nav="system" class="admin-only" data-i18n="Hệ thống">Hệ thống</a>
+      <a href="#/account" data-nav="account" data-i18n="Tài khoản">Tài khoản</a>
     </nav>
     <div class="side-foot">
       <span id="who" class="muted"></span>
       <span id="ver" class="muted"></span>
-      <button id="logout" class="btn ghost small">Đăng xuất</button>
+      <div class="row"><button id="logout" class="btn ghost small" data-i18n="Đăng xuất">Đăng xuất</button><span class="lang-switch"></span></div>
     </div>
   </aside>
   <main id="view" class="main"></main>
 </div>
 <div id="toast" class="toast" hidden></div>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
