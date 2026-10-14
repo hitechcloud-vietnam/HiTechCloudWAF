@@ -290,7 +290,12 @@ func (t ListAttackEvents) Execute(ctx context.Context, p EventsParams) (EventsRe
 	if filtered {
 		fetch = hcw.MaxEventsFetch
 	}
-	evs, err := inst.Client.Events(ctx, fetch, p.SiteID)
+	var ipFilter string
+	if p.ClientIP != "" {
+		pfx, _ := hcw.NormalizeCIDR(p.ClientIP)
+		ipFilter = pfx.String()
+	}
+	evs, err := inst.Client.Events(ctx, hcw.EventQuery{Limit: fetch, SiteID: p.SiteID, Since: since, IP: ipFilter, Action: p.Action})
 	if err != nil {
 		return EventsResult{}, err
 	}
@@ -371,7 +376,7 @@ func (t GetAttackEvent) Execute(ctx context.Context, p EventParams) (EventResult
 		return EventResult{}, err
 	}
 	id, _ := hcw.ValidateEventID(p.EventID)
-	evs, err := inst.Client.Events(ctx, hcw.MaxEventsFetch, p.SiteID)
+	evs, err := inst.Client.Events(ctx, hcw.EventQuery{Limit: hcw.MaxEventsFetch, SiteID: p.SiteID})
 	if err != nil {
 		return EventResult{}, err
 	}

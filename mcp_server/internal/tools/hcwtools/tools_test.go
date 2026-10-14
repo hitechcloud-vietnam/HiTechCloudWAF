@@ -308,6 +308,9 @@ func TestListAttackEventsFilters(t *testing.T) {
 	if since.Returned != 12 || since.MoreAvailable || since.PossiblyIncomplete || since.Since != "2026-10-14T11:50:00Z" {
 		t.Errorf("since 10m = %+v", since.Returned)
 	}
+	if q := node.requestsTo("GET", "/api/open/events"); !strings.Contains(q[len(q)-1].Query, "since=2026-10-14T11%3A50%3A00Z") {
+		t.Errorf("since not sent to the node: %q", q[len(q)-1].Query)
+	}
 	abs := ok[EventsResult](t, s, "list_attack_events", map[string]any{"since": "2026-10-14T11:55:00Z", "limit": 3})
 	if abs.Returned != 3 || !abs.MoreAvailable {
 		t.Errorf("since absolute with limit = %d more=%v", abs.Returned, abs.MoreAvailable)
@@ -321,6 +324,12 @@ func TestListAttackEventsFilters(t *testing.T) {
 	}
 	if ip.Returned == 0 {
 		t.Error("client_ip filter returned nothing")
+	}
+	// Filters are also sent to the node (newer nodes filter server-side; the
+	// fake, like older nodes, ignores them and the tool filters again).
+	if q := node.requestsTo("GET", "/api/open/events"); !strings.Contains(q[len(q)-1].Query, "ip=203.0.113.2%2F32") ||
+		!strings.Contains(q[len(q)-1].Query, "action=block") || !strings.Contains(q[len(q)-1].Query, "limit=1000") {
+		t.Errorf("filters not sent to the node: %q", q[len(q)-1].Query)
 	}
 	cidr := ok[EventsResult](t, s, "list_attack_events", map[string]any{"client_ip": "203.0.113.0/24", "limit": 500})
 	if cidr.Returned != 31 {

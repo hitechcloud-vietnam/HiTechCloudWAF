@@ -208,11 +208,31 @@ func (c *Client) ModifySite(ctx context.Context, id int, change SiteChange) (jso
 	return res, desc, nil
 }
 
-// Events returns the latest events, newest first.
-func (c *Client) Events(ctx context.Context, limit, siteID int) ([]WireEvent, error) {
-	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if siteID > 0 {
-		q.Set("site_id", strconv.Itoa(siteID))
+// EventQuery selects events. Nodes since v0.5 filter by Since, IP and
+// Action themselves (over every event they keep, not only the latest 1000);
+// older nodes ignore those parameters, so callers filter the answer again.
+type EventQuery struct {
+	Limit  int
+	SiteID int
+	Since  time.Time
+	IP     string
+	Action string
+}
+
+// Events returns the latest events matching q, newest first.
+func (c *Client) Events(ctx context.Context, eq EventQuery) ([]WireEvent, error) {
+	q := url.Values{"limit": {strconv.Itoa(eq.Limit)}}
+	if eq.SiteID > 0 {
+		q.Set("site_id", strconv.Itoa(eq.SiteID))
+	}
+	if !eq.Since.IsZero() {
+		q.Set("since", eq.Since.UTC().Format(time.RFC3339))
+	}
+	if eq.IP != "" {
+		q.Set("ip", eq.IP)
+	}
+	if eq.Action != "" {
+		q.Set("action", eq.Action)
 	}
 	var l list[WireEvent]
 	if err := c.Do(ctx, http.MethodGet, pathEvents, q, nil, &l); err != nil {
