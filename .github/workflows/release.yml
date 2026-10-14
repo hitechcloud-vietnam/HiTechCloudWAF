@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.1.0 (creates the tag on the selected branch)"
+        required: true
 
 permissions:
   contents: write
@@ -17,9 +21,11 @@ jobs:
         with:
           go-version-file: waf/go.mod
       - name: Build binaries
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -eu
-          VERSION="${GITHUB_REF_NAME}"
+          echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "bad version $VERSION"; exit 1; }
           mkdir -p dist
           for arch in amd64 arm64; do
             (cd waf && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o ../dist/hcw-waf-linux-$arch ./cmd/hcw-waf)
@@ -28,14 +34,10 @@ jobs:
           cp scripts/install.sh dist/
           (cd dist && sha256sum * > SHA256SUMS)
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: HiTechCloud WAF ${{ inputs.version || github.ref_name }}
           files: dist/*
           generate_release_notes: true
-      - name: Upload artifacts
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hitechcloud-waf
-          path: dist/*
