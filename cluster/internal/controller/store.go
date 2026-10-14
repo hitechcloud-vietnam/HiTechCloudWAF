@@ -53,19 +53,23 @@ func (s *Store) saveLocked() error {
 	if s.path == "" {
 		return nil
 	}
-	list := s.listLocked()
-	b, err := json.MarshalIndent(list, "", "  ")
+	return writeJSONFile(s.path, s.listLocked())
+}
+
+// writeJSONFile replaces path atomically with v as indented JSON.
+func writeJSONFile(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	return os.Rename(tmp, path)
 }
 
 func (s *Store) listLocked() []*api.Node {

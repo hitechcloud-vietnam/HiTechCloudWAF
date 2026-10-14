@@ -1,6 +1,8 @@
 // Package dnsserver is an authoritative DNS server that answers the records
 // of protected domains with the healthy WAF nodes of a pool. It is how
-// traffic is spread across, and failed over between, cluster nodes.
+// traffic is spread across, and failed over between, cluster nodes. Zones
+// also carry static records, from the configuration file and from the
+// controller API.
 package dnsserver
 
 import (
@@ -8,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,7 +28,13 @@ import (
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/api"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/dnsrecord"
 )
+
+// maxCNAMEChain bounds how many in-zone CNAMEs one answer follows.
+const maxCNAMEChain = 8
+
+var errNotModified = errors.New("not modified")
 
 type regionRule struct {
 	net    *net.IPNet
@@ -34,15 +43,92 @@ type regionRule struct {
 
 type record struct {
 	config.Record
-	fqdn  string
-	rules []regionRule
-	rr    dns.RR // static records
+	fqdn    string
+	rules   []regionRule
+	country []countryRule
+	rr      dns.RR // static records
 }
+
+func (r *record) isCNAME() bool { return r.rr != nil && r.rr.Header().Rrtype == dns.TypeCNAME }
 
 type zone struct {
 	config.Zone
+	origin string
+	local  []*record // records of the configuration file
+}
+
+// zoneData is what a zone answers from: its local records merged with the
+// static records of the controller. It is rebuilt, never modified.
+type zoneData struct {
 	origin  string
 	records map[string][]*record // by lower-case FQDN
+	names   map[string]bool      // owners and their ancestors (empty non-terminals)
+	cuts    map[string]bool      // delegation points (NS records below the apex)
+	serial  uint32
+}
+
+func newZoneData(origin string, serial uint32) *zoneData {
+	return &zoneData{origin: origin, records: map[string][]*record{}, names: map[string]bool{origin: true}, cuts: map[string]bool{}, serial: serial}
+}
+
+// add inserts r, refusing a CNAME next to other data and duplicates.
+func (d *zoneData) add(r *record) error {
+	for _, o := range d.records[r.fqdn] {
+		if o.isCNAME() || r.isCNAME() {
+			return fmt.Errorf("%s: a CNAME cannot coexist with other data", r.fqdn)
+		}
+		if o.rr != nil && r.rr != nil && dns.IsDuplicate(o.rr, r.rr) {
+			return fmt.Errorf("duplicate record %s", strings.Join(strings.Fields(r.rr.String()), " "))
+		}
+	}
+	d.records[r.fqdn] = append(d.records[r.fqdn], r)
+	for n := r.fqdn; n != d.origin && n != "."; n = parent(n) {
+		d.names[n] = true
+	}
+	if r.rr != nil && r.rr.Header().Rrtype == dns.TypeNS && r.fqdn != d.origin {
+		d.cuts[r.fqdn] = true
+	}
+	return nil
+}
+
+func parent(name string) string {
+	i, end := dns.NextLabel(name, 0)
+	if end {
+		return "."
+	}
+	return name[i:]
+}
+
+// lookup finds the records of name: an exact match, an empty non-terminal
+// (exists, no records) or the wildcard of the closest encloser (RFC 4592).
+func (d *zoneData) lookup(name string) ([]*record, bool) {
+	if rs, ok := d.records[name]; ok {
+		return rs, true
+	}
+	if d.names[name] {
+		return nil, true
+	}
+	for p := parent(name); p != "."; p = parent(p) {
+		if d.names[p] {
+			rs, ok := d.records["*."+p]
+			return rs, ok
+		}
+	}
+	return nil, false
+}
+
+// cutFor returns the topmost delegation point at or above name, if any.
+func (d *zoneData) cutFor(name string) string {
+	if len(d.cuts) == 0 {
+		return ""
+	}
+	cut := ""
+	for n := name; n != d.origin && n != "."; n = parent(n) {
+		if d.cuts[n] {
+			cut = n
+		}
+	}
+	return cut
 }
 
 // Server is the DNS server.
@@ -52,9 +138,13 @@ type Server struct {
 	zones []*zone
 	http  *http.Client
 	base  *url.URL
+	geo   *geoDB
 
 	mu    sync.RWMutex
 	pools map[string][]api.Endpoint
+	data  map[*zone]*zoneData
+	// etag of the controller's static record set last applied.
+	recordsETag string
 
 	// rnd is replaceable in tests.
 	rnd func(n int) int
@@ -63,50 +153,44 @@ type Server struct {
 // New validates zones and builds the server.
 func New(cfg *config.DNS, log *slog.Logger) (*Server, error) {
 	s := &Server{cfg: cfg, log: log, pools: map[string][]api.Endpoint{}, rnd: rand.IntN}
+	if cfg.GeoIPDB != "" {
+		g, err := openGeoDB(cfg.GeoIPDB)
+		if err != nil {
+			return nil, fmt.Errorf("geoip_db: %w", err)
+		}
+		s.geo = g
+	}
+	for name, p := range cfg.Pools {
+		if _, err := compileCountryRules(p.PreferCountry); err != nil {
+			return nil, fmt.Errorf("dns pool %s: %w", name, err)
+		}
+	}
 	for _, zc := range cfg.Zones {
-		z := &zone{Zone: zc, origin: dns.Fqdn(strings.ToLower(zc.Name)), records: map[string][]*record{}}
-		for i := range z.NS {
-			z.NS[i] = dns.Fqdn(z.NS[i])
+		z := &zone{Zone: zc, origin: dnsrecord.Origin(zc.Name)}
+		if _, ok := dns.IsDomainName(z.origin); !ok {
+			return nil, fmt.Errorf("invalid zone name %q", zc.Name)
+		}
+		z.NS = make([]string, len(zc.NS))
+		for i, n := range zc.NS {
+			z.NS[i] = dns.Fqdn(strings.ToLower(n))
 		}
 		z.Hostmaster = dns.Fqdn(z.Hostmaster)
+		check := newZoneData(z.origin, 0)
 		for _, rc := range zc.Records {
-			r := &record{Record: rc}
-			r.Type = strings.ToUpper(r.Type)
-			if r.Name == "" || r.Name == "@" {
-				r.fqdn = z.origin
-			} else {
-				r.fqdn = dns.Fqdn(strings.ToLower(r.Name) + "." + z.origin)
+			r, err := s.compile(z, rc)
+			if err != nil {
+				return nil, fmt.Errorf("zone %s record %s %s: %w", zc.Name, rc.Name, rc.Type, err)
 			}
-			if r.TTL == 0 {
-				r.TTL = z.TTL
+			if err := check.add(r); err != nil {
+				return nil, fmt.Errorf("zone %s: %w", zc.Name, err)
 			}
-			if r.Pool != "" {
-				if r.Type == "" {
-					r.Type = "A"
-				}
-				if r.Type != "A" && r.Type != "AAAA" {
-					return nil, fmt.Errorf("zone %s record %s: pool records must be A or AAAA", zc.Name, rc.Name)
-				}
-				for _, pr := range r.PreferRegion {
-					_, n, err := net.ParseCIDR(pr.CIDR)
-					if err != nil {
-						return nil, fmt.Errorf("zone %s record %s: %w", zc.Name, rc.Name, err)
-					}
-					r.rules = append(r.rules, regionRule{n, pr.Region})
-				}
-			} else {
-				rr, err := dns.NewRR(fmt.Sprintf("%s %d IN %s %s", r.fqdn, r.TTL, r.Type, r.Value))
-				if err != nil || rr == nil {
-					return nil, fmt.Errorf("zone %s record %s %s: invalid static record: %v", zc.Name, rc.Name, rc.Type, err)
-				}
-				r.rr = rr
-			}
-			z.records[r.fqdn] = append(z.records[r.fqdn], r)
+			z.local = append(z.local, r)
 		}
 		s.zones = append(s.zones, z)
 	}
 	// Longest origin first so sub-zones win.
 	sort.Slice(s.zones, func(i, j int) bool { return len(s.zones[i].origin) > len(s.zones[j].origin) })
+	s.rebuild(api.DNSRecordSet{})
 
 	u, err := url.Parse(strings.TrimRight(cfg.ControllerURL, "/"))
 	if err != nil || u.Host == "" {
@@ -129,6 +213,88 @@ func New(cfg *config.DNS, log *slog.Logger) (*Server, error) {
 	return s, nil
 }
 
+// compile validates one record of the configuration file.
+func (s *Server) compile(z *zone, rc config.Record) (*record, error) {
+	r := &record{Record: rc}
+	r.Type = strings.ToUpper(strings.TrimSpace(r.Type))
+	if r.TTL == 0 {
+		r.TTL = z.TTL
+	}
+	if r.Pool == "" {
+		rr, err := dnsrecord.Build(z.origin, rc.Name, r.Type, rc.Value, r.TTL)
+		if err != nil {
+			return nil, err
+		}
+		r.fqdn, r.rr = rr.Header().Name, rr
+		return r, nil
+	}
+	fqdn, err := dnsrecord.Owner(z.origin, rc.Name)
+	if err != nil {
+		return nil, err
+	}
+	r.fqdn = fqdn
+	if r.Type == "" {
+		r.Type = "A"
+	}
+	if r.Type != "A" && r.Type != "AAAA" {
+		return nil, errors.New("pool records must be A or AAAA")
+	}
+	for _, pr := range r.PreferRegion {
+		_, n, err := net.ParseCIDR(pr.CIDR)
+		if err != nil {
+			return nil, err
+		}
+		r.rules = append(r.rules, regionRule{n, pr.Region})
+	}
+	countries := rc.PreferCountry
+	if len(countries) == 0 {
+		countries = s.cfg.Pools[r.Pool].PreferCountry
+	}
+	if r.country, err = compileCountryRules(countries); err != nil {
+		return nil, err
+	}
+	if len(r.country) > 0 && s.geo == nil {
+		s.log.Warn("prefer_country needs dns.geoip_db; country routing disabled", "zone", z.Name, "record", rc.Name)
+	}
+	return r, nil
+}
+
+// rebuild merges the local records with the controller's static records.
+// A controller record that is invalid or conflicts with a local one is
+// skipped: the configuration file wins.
+func (s *Server) rebuild(set api.DNSRecordSet) {
+	data := make(map[*zone]*zoneData, len(s.zones))
+	byOrigin := make(map[string]*zone, len(s.zones))
+	for _, z := range s.zones {
+		d := newZoneData(z.origin, max(z.Serial, set.Serial))
+		for _, r := range z.local {
+			_ = d.add(r) // validated by New
+		}
+		data[z], byOrigin[z.origin] = d, z
+	}
+	for _, rc := range set.Records {
+		z := byOrigin[dnsrecord.Origin(rc.Zone)]
+		if z == nil {
+			continue // a zone served by other DNS servers
+		}
+		ttl := rc.TTL
+		if ttl == 0 {
+			ttl = z.TTL
+		}
+		rr, err := dnsrecord.Build(z.origin, rc.Name, rc.Type, rc.Value, ttl)
+		if err == nil {
+			r := &record{Record: config.Record{Name: rc.Name, Type: strings.ToUpper(rc.Type), Value: rc.Value, TTL: ttl}, fqdn: rr.Header().Name, rr: rr}
+			err = data[z].add(r)
+		}
+		if err != nil {
+			s.log.Warn("controller dns record ignored", "id", rc.ID, "zone", rc.Zone, "name", rc.Name, "type", rc.Type, "err", err)
+		}
+	}
+	s.mu.Lock()
+	s.data = data
+	s.mu.Unlock()
+}
+
 // SetPool replaces the endpoints of a pool (used by refresh and tests).
 func (s *Server) SetPool(pool string, eps []api.Endpoint) {
 	s.mu.Lock()
@@ -136,14 +302,16 @@ func (s *Server) SetPool(pool string, eps []api.Endpoint) {
 	s.mu.Unlock()
 }
 
+// SetRecords replaces the controller's static records (used by refresh and
+// tests).
+func (s *Server) SetRecords(set api.DNSRecordSet) { s.rebuild(set) }
+
 func (s *Server) poolNames() []string {
 	seen := map[string]bool{}
 	for _, z := range s.zones {
-		for _, rs := range z.records {
-			for _, r := range rs {
-				if r.Pool != "" {
-					seen[r.Pool] = true
-				}
+		for _, r := range z.local {
+			if r.Pool != "" {
+				seen[r.Pool] = true
 			}
 		}
 	}
@@ -155,21 +323,48 @@ func (s *Server) poolNames() []string {
 	return out
 }
 
-// Refresh fetches every pool from the controller. A pool that cannot be
-// fetched keeps its last known endpoints so DNS keeps answering while the
-// controller is unreachable.
+// Refresh fetches every pool and the static records from the controller.
+// Data that cannot be fetched keeps its last known value so DNS keeps
+// answering while the controller is unreachable. It also reloads the GeoIP
+// database when its file changed.
 func (s *Server) Refresh(ctx context.Context) {
 	for _, p := range s.poolNames() {
 		var pe api.PoolEndpoints
-		if err := s.get(ctx, "/v1/pools/"+url.PathEscape(p)+"/endpoints", &pe); err != nil {
+		if err := s.get(ctx, "/v1/pools/"+url.PathEscape(p)+"/endpoints", nil, &pe); err != nil {
 			s.log.Warn("refresh pool failed, keeping last known endpoints", "pool", p, "err", err)
 			continue
 		}
 		s.SetPool(p, pe.Endpoints)
 	}
+
+	s.mu.RLock()
+	etag := s.recordsETag
+	s.mu.RUnlock()
+	var set api.DNSRecordSet
+	switch err := s.get(ctx, "/v1/dns/records", &etag, &set); {
+	case errors.Is(err, errNotModified):
+	case err != nil:
+		s.log.Warn("refresh dns records failed, keeping last known records", "err", err)
+	default:
+		s.rebuild(set)
+		s.mu.Lock()
+		s.recordsETag = etag
+		s.mu.Unlock()
+		s.log.Debug("dns records updated", "serial", set.Serial, "records", len(set.Records))
+	}
+
+	if s.geo != nil {
+		if changed, err := s.geo.reloadIfChanged(); err != nil {
+			s.log.Warn("reload geoip_db failed, keeping the loaded database", "err", err)
+		} else if changed {
+			s.log.Info("geoip_db reloaded", "path", s.cfg.GeoIPDB)
+		}
+	}
 }
 
-func (s *Server) get(ctx context.Context, path string, out any) error {
+// get fetches path into out. When etag is not nil it is sent as
+// If-None-Match and updated from the response; errNotModified reports a 304.
+func (s *Server) get(ctx context.Context, path string, etag *string, out any) error {
 	u := *s.base
 	u.Path += path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -177,16 +372,28 @@ func (s *Server) get(ctx context.Context, path string, out any) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.Token)
+	if etag != nil && *etag != "" {
+		req.Header.Set("If-None-Match", *etag)
+	}
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode == http.StatusNotModified && etag != nil {
+		return errNotModified
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	return json.Unmarshal(b, out)
+	if err := json.Unmarshal(b, out); err != nil {
+		return err
+	}
+	if etag != nil {
+		*etag = resp.Header.Get("ETag")
+	}
+	return nil
 }
 
 // Run serves UDP and TCP until ctx is done.
@@ -212,7 +419,7 @@ func (s *Server) Run(ctx context.Context) error {
 	for _, srv := range servers {
 		go func(srv *dns.Server) { errc <- srv.ListenAndServe() }(srv)
 	}
-	s.log.Info("dns listening", "addr", s.cfg.Listen, "zones", len(s.zones))
+	s.log.Info("dns listening", "addr", s.cfg.Listen, "zones", len(s.zones), "geoip", s.geo != nil)
 	select {
 	case <-ctx.Done():
 		for _, srv := range servers {
@@ -233,12 +440,12 @@ func (s *Server) findZone(name string) *zone {
 	return nil
 }
 
-func (z *zone) soa() dns.RR {
+func (z *zone) soa(serial uint32) dns.RR {
 	return &dns.SOA{
 		Hdr:     dns.RR_Header{Name: z.origin, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: z.TTL},
 		Ns:      z.NS[0],
 		Mbox:    z.Hostmaster,
-		Serial:  z.Serial,
+		Serial:  serial,
 		Refresh: 3600, Retry: 600, Expire: 604800,
 		Minttl: z.TTL,
 	}
@@ -250,6 +457,15 @@ func (z *zone) nsRRs() []dns.RR {
 		out = append(out, &dns.NS{Hdr: dns.RR_Header{Name: z.origin, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: z.TTL}, Ns: n})
 	}
 	return out
+}
+
+func (z *zone) hasNS(target string) bool {
+	for _, n := range z.NS {
+		if strings.EqualFold(n, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeDNS implements dns.Handler.
@@ -277,8 +493,7 @@ func (s *Server) answer(req *dns.Msg, remote net.IP) *dns.Msg {
 		return m
 	}
 	q := req.Question[0]
-	name := strings.ToLower(q.Name)
-	z := s.findZone(name)
+	z := s.findZone(strings.ToLower(q.Name))
 	if z == nil {
 		m.SetRcode(req, dns.RcodeRefused)
 		return m
@@ -287,82 +502,161 @@ func (s *Server) answer(req *dns.Msg, remote net.IP) *dns.Msg {
 
 	client := remote
 	var ecs *dns.EDNS0_SUBNET
-	if opt := req.IsEdns0(); opt != nil {
-		for _, o := range opt.Option {
-			if e, ok := o.(*dns.EDNS0_SUBNET); ok {
+	var opt *dns.OPT
+	if o := req.IsEdns0(); o != nil {
+		for _, op := range o.Option {
+			if e, ok := op.(*dns.EDNS0_SUBNET); ok {
 				ecs = e
 				client = e.Address
 			}
 		}
-		resp := new(dns.OPT)
-		resp.Hdr.Name, resp.Hdr.Rrtype = ".", dns.TypeOPT
-		resp.SetUDPSize(1232)
+		opt = new(dns.OPT)
+		opt.Hdr.Name, opt.Hdr.Rrtype = ".", dns.TypeOPT
+		opt.SetUDPSize(1232)
+	}
+
+	usedClient := s.resolve(m, z, q, client)
+
+	if opt != nil {
 		if ecs != nil {
+			// Scope 0 tells resolvers the answer is valid for every client;
+			// only answers routed by client address are scoped to its subnet.
 			echo := *ecs
-			echo.SourceScope = ecs.SourceNetmask
-			resp.Option = append(resp.Option, &echo)
+			echo.SourceScope = 0
+			if usedClient {
+				echo.SourceScope = ecs.SourceNetmask
+			}
+			opt.Option = append(opt.Option, &echo)
 		}
-		defer func() { m.Extra = append(m.Extra, resp) }()
+		m.Extra = append(m.Extra, opt)
 	}
+	return m
+}
 
-	if name == z.origin {
-		switch q.Qtype {
-		case dns.TypeSOA:
-			m.Answer = append(m.Answer, z.soa())
-			return m
-		case dns.TypeNS:
-			m.Answer = append(m.Answer, z.nsRRs()...)
-			return m
+// resolve fills m with the answer to q in z, following CNAMEs into the zones
+// this server is authoritative for. It reports whether the answer depends on
+// the client address.
+func (s *Server) resolve(m *dns.Msg, z *zone, q dns.Question, client net.IP) bool {
+	s.mu.RLock()
+	data := s.data
+	s.mu.RUnlock()
+
+	usedClient := false
+	name := q.Name
+	seen := map[string]bool{}
+	for hop := 0; ; hop++ {
+		d := data[z]
+		lname := strings.ToLower(name)
+		seen[lname] = true
+
+		// Below a delegation: refer to the child zone's name servers. A DS
+		// query at the cut belongs to this (parent) zone.
+		if cut := d.cutFor(lname); cut != "" && (cut != lname || q.Qtype != dns.TypeDS) {
+			if hop == 0 {
+				m.Authoritative = false
+			}
+			s.referral(m, d, cut)
+			return usedClient
+		}
+
+		recs, ok := d.lookup(lname)
+		if !ok {
+			m.Rcode = dns.RcodeNameError
+			m.Ns = append(m.Ns, z.soa(d.serial))
+			return usedClient
+		}
+		if len(recs) == 1 && recs[0].isCNAME() && q.Qtype != dns.TypeCNAME {
+			rr := dns.Copy(recs[0].rr)
+			rr.Header().Name = name
+			m.Answer = append(m.Answer, rr)
+			target := rr.(*dns.CNAME).Target
+			lt := strings.ToLower(target)
+			nz := s.findZone(lt)
+			if nz == nil || seen[lt] || hop+1 >= maxCNAMEChain {
+				return usedClient // the resolver follows the chain
+			}
+			z, name = nz, target
+			continue
+		}
+
+		ans, used := s.collect(z, d, recs, lname, name, q.Qtype, client)
+		usedClient = usedClient || used
+		m.Answer = append(m.Answer, ans...)
+		if len(ans) == 0 {
+			m.Ns = append(m.Ns, z.soa(d.serial)) // NODATA
+		}
+		return usedClient
+	}
+}
+
+// referral answers with the NS records of a delegated child and the glue
+// addresses this zone holds for them.
+func (s *Server) referral(m *dns.Msg, d *zoneData, cut string) {
+	for _, r := range d.records[cut] {
+		if r.rr == nil || r.rr.Header().Rrtype != dns.TypeNS {
+			continue
+		}
+		m.Ns = append(m.Ns, dns.Copy(r.rr))
+		target := strings.ToLower(r.rr.(*dns.NS).Ns)
+		if !dns.IsSubDomain(d.origin, target) {
+			continue
+		}
+		for _, g := range d.records[target] {
+			if g.rr != nil && (g.rr.Header().Rrtype == dns.TypeA || g.rr.Header().Rrtype == dns.TypeAAAA) {
+				m.Extra = append(m.Extra, dns.Copy(g.rr))
+			}
 		}
 	}
+}
 
-	recs := z.records[name]
-	if len(recs) == 0 && name != z.origin {
-		m.Rcode = dns.RcodeNameError
-		m.Ns = append(m.Ns, z.soa())
-		return m
+// collect returns the records of an existing name matching qtype. owner is
+// the queried spelling of the name (wildcard answers are synthesised for it).
+func (s *Server) collect(z *zone, d *zoneData, recs []*record, lname, owner string, qtype uint16, client net.IP) ([]dns.RR, bool) {
+	var out []dns.RR
+	anyQ := qtype == dns.TypeANY
+	apex := lname == z.origin
+	if apex && (qtype == dns.TypeSOA || anyQ) {
+		out = append(out, z.soa(d.serial))
 	}
-
+	if apex && (qtype == dns.TypeNS || anyQ) {
+		out = append(out, z.nsRRs()...)
+	}
+	usedClient := false
 	for _, r := range recs {
 		if r.rr != nil {
 			t := r.rr.Header().Rrtype
-			if t == q.Qtype || q.Qtype == dns.TypeANY || (t == dns.TypeCNAME && q.Qtype != dns.TypeCNAME) {
-				m.Answer = append(m.Answer, dns.Copy(r.rr))
+			if t != qtype && !anyQ {
+				continue
 			}
+			if apex && t == dns.TypeNS && z.hasNS(r.rr.(*dns.NS).Ns) {
+				continue // already listed from the zone's ns
+			}
+			rr := dns.Copy(r.rr)
+			rr.Header().Name = owner
+			out = append(out, rr)
 			continue
 		}
 		// A dynamic record of type A hands out IPv4, one of type AAAA IPv6.
-		anyQ := q.Qtype == dns.TypeANY
-		wantA := r.Type == "A" && (q.Qtype == dns.TypeA || anyQ)
-		wantAAAA := r.Type == "AAAA" && (q.Qtype == dns.TypeAAAA || anyQ)
+		wantA := r.Type == "A" && (qtype == dns.TypeA || anyQ)
+		wantAAAA := r.Type == "AAAA" && (qtype == dns.TypeAAAA || anyQ)
 		if !wantA && !wantAAAA {
 			continue
 		}
+		usedClient = usedClient || len(r.rules) > 0 || (len(r.country) > 0 && s.geo != nil)
 		for _, ep := range s.pick(r, client) {
 			if wantA && ep.IPv4 != "" {
 				if ip := net.ParseIP(ep.IPv4).To4(); ip != nil {
-					m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: r.TTL}, A: ip})
+					out = append(out, &dns.A{Hdr: dns.RR_Header{Name: owner, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: r.TTL}, A: ip})
 				}
 			}
 			if wantAAAA && ep.IPv6 != "" {
 				if ip := net.ParseIP(ep.IPv6); ip != nil && ip.To4() == nil {
-					m.Answer = append(m.Answer, &dns.AAAA{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: r.TTL}, AAAA: ip})
+					out = append(out, &dns.AAAA{Hdr: dns.RR_Header{Name: owner, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: r.TTL}, AAAA: ip})
 				}
 			}
 		}
 	}
-	// A CNAME owner must not carry other data; if we answered a CNAME drop
-	// anything else.
-	for _, rr := range m.Answer {
-		if rr.Header().Rrtype == dns.TypeCNAME && q.Qtype != dns.TypeCNAME {
-			m.Answer = []dns.RR{rr}
-			break
-		}
-	}
-	if len(m.Answer) == 0 {
-		m.Ns = append(m.Ns, z.soa()) // NODATA
-	}
-	return m
+	return out, usedClient
 }
 
 // pick chooses the endpoints of a dynamic record for a client.
@@ -383,24 +677,8 @@ func (s *Server) pick(r *record, client net.IP) []api.Endpoint {
 		}
 		healthy = append(healthy, all...)
 	}
-
-	// Region preference: keep the client's region when it has a healthy node.
 	if client != nil {
-		for _, rule := range r.rules {
-			if !rule.net.Contains(client) {
-				continue
-			}
-			var local []api.Endpoint
-			for _, e := range healthy {
-				if e.Region == rule.region {
-					local = append(local, e)
-				}
-			}
-			if len(local) > 0 {
-				healthy = local
-			}
-			break
-		}
+		healthy = s.preferRegion(r, client, healthy)
 	}
 
 	n := r.MaxAnswers
@@ -408,6 +686,42 @@ func (s *Server) pick(r *record, client net.IP) []api.Endpoint {
 		n = len(healthy)
 	}
 	return s.weightedSample(healthy, n)
+}
+
+// preferRegion keeps the nodes of the client's region when that region has
+// one. The region comes from, in order: the first prefer_region CIDR that
+// contains the client, a prefer_country rule for its GeoIP country, one for
+// its continent. A region without candidates falls through to the next; when
+// none applies every candidate is kept.
+func (s *Server) preferRegion(r *record, client net.IP, eps []api.Endpoint) []api.Endpoint {
+	in := func(region string) []api.Endpoint {
+		var local []api.Endpoint
+		for _, e := range eps {
+			if region != "" && e.Region == region {
+				local = append(local, e)
+			}
+		}
+		return local
+	}
+	for _, rule := range r.rules {
+		if rule.net.Contains(client) {
+			if local := in(rule.region); len(local) > 0 {
+				return local
+			}
+			break
+		}
+	}
+	if len(r.country) == 0 || s.geo == nil {
+		return eps
+	}
+	country, continent := s.geo.lookup(client)
+	if local := in(countryRegion(r.country, country)); len(local) > 0 {
+		return local
+	}
+	if local := in(continentRegion(r.country, continent)); len(local) > 0 {
+		return local
+	}
+	return eps
 }
 
 // weightedSample draws n endpoints without replacement, proportionally to

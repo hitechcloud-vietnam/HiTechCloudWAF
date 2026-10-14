@@ -8,7 +8,10 @@ controller:
   # Generate each with: hcw token > /etc/hcw/secrets/<name>.token
   admin_token_file: /etc/hcw/secrets/admin.token   # dashboard + admin API
   node_token_file: /etc/hcw/secrets/node.token     # agents (heartbeat, config)
-  dns_token_file: /etc/hcw/secrets/dns.token       # DNS servers (read pools)
+  dns_token_file: /etc/hcw/secrets/dns.token       # DNS servers (read pools + records)
+  # Static DNS records managed on the dashboard / via /v1/dns/records.
+  # Defaults to dns-records.json next to state_file.
+  dns_records_file: /var/lib/hcw/dns-records.json
 
   heartbeat_timeout: 30s
   probe_interval: 10s
