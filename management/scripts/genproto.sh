@@ -25,7 +25,7 @@ for dir in ${DIRS}; do
               --go-grpc_out=. --go-grpc_opt=paths=source_relative \
               "${FS}"
 
-          goimports -local chaitin.cn -w ./*.pb.go
+          goimports -local github.com/hitechcloud-vietnam -w ./*.pb.go
         fi
 	    popd || return
 	  done

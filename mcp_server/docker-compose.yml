@@ -1,8 +1,8 @@
 services:
   mcp_server:
     build: .
-    image: safeline-mcp:local
-    container_name: safeline-mcp
+    image: hitechcloud-waf-mcp:local
+    container_name: hitechcloud-waf-mcp
     restart: unless-stopped
     ports:
       - "${MCP_PUBLISH_ADDRESS:-127.0.0.1}:${LISTEN_PORT:-5678}:${LISTEN_PORT:-5678}"
@@ -16,7 +16,7 @@ services:
       # for a loopback-only deployment; a non-loopback listener without a token
       # is refused at startup.
       MCP_AUTH_DISABLED: "${MCP_AUTH_DISABLED:-}"
-      MCP_AUTH_STATE_FILE: "/var/lib/safeline-mcp/auth.json"
+      MCP_AUTH_STATE_FILE: "/var/lib/hitechcloud-waf-mcp/auth.json"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -24,19 +24,19 @@ services:
       - /tmp:size=16m,mode=1777
     volumes:
       - type: bind
-        source: ${SAFELINE_MCP_CONFIG_FILE:-./config.yaml}
-        target: /etc/safeline-mcp/config.yaml
+        source: ${HCW_MCP_CONFIG_FILE:-./config.yaml}
+        target: /etc/hitechcloud-waf-mcp/config.yaml
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SAFELINE_MCP_SECRETS_DIR:-./secrets}
+        source: ${HCW_MCP_SECRETS_DIR:-./secrets}
         target: /run/secrets
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SAFELINE_MCP_STATE_DIR:-./state}
-        target: /var/lib/safeline-mcp
+        source: ${HCW_MCP_STATE_DIR:-./state}
+        target: /var/lib/hitechcloud-waf-mcp
         bind:
           create_host_path: false

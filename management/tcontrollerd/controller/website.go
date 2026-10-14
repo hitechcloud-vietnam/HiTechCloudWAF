@@ -13,10 +13,10 @@ import (
 	"strings"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/model"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/ngcmd"
-	pb "chaitin.cn/patronus/safeline-2/management/tcontrollerd/proto/website"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/ngcmd"
+	pb "github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/proto/website"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/utils"
 )
 
 const (

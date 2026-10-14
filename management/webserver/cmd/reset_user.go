@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/log"
 )
 
 var logger = log.GetLogger("cmd")

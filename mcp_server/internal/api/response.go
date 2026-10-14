@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Response is the envelope returned by SafeLine's management API. SafeLine can
+// Response is the envelope returned by HiTechCloud WAF's management API. HiTechCloud WAF can
 // report an application error with HTTP 200, so callers must not infer success
 // from the HTTP status alone.
 type Response[T any] struct {
@@ -14,7 +14,7 @@ type Response[T any] struct {
 	Msg  string `json:"msg"`
 }
 
-// ResponseError represents an error carried in a SafeLine response envelope.
+// ResponseError represents an error carried in a HiTechCloud WAF response envelope.
 type ResponseError struct {
 	Code    any
 	Message string
@@ -25,7 +25,7 @@ func (e *ResponseError) Error() string {
 	if message == "" {
 		message = "request failed"
 	}
-	return fmt.Sprintf("SafeLine API error %v: %s", e.Code, message)
+	return fmt.Sprintf("HiTechCloud WAF API error %v: %s", e.Code, message)
 }
 
 // Validate returns an error whenever the envelope contains a non-empty err

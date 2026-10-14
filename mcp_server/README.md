@@ -1,12 +1,12 @@
-# SafeLine MCP Server
+# HiTechCloud WAF MCP Server
 
-SafeLine MCP Server provides read-only, multi-instance access to SafeLine CE through the Model Context Protocol. This release intentionally exposes one Tool and one SafeLine API:
+HiTechCloud WAF MCP Server provides read-only, multi-instance access to HiTechCloud WAF through the Model Context Protocol. This release intentionally exposes one Tool and one HiTechCloud WAF API:
 
-| MCP Tool | SafeLine request | Effect |
+| MCP Tool | HiTechCloud WAF request | Effect |
 |---|---|---|
 | `get_attack_events` | `GET /api/open/events` | Read only |
 
-The original site-creation, blacklist, and whitelist Tools have been removed. The downstream client has no generic write method and cannot issue SafeLine `POST`, `PUT`, `PATCH`, or `DELETE` requests.
+The original site-creation, blacklist, and whitelist Tools have been removed. The downstream client has no generic write method and cannot issue HiTechCloud WAF `POST`, `PUT`, `PATCH`, or `DELETE` requests.
 
 ## Protocol
 
@@ -25,7 +25,7 @@ Instances are deployment configuration, not MCP Tools. Each Tool call must speci
 
 ```yaml
 server:
-  name: "SafeLine MCP Server"
+  name: "HiTechCloud WAF MCP Server"
   version: "2.0.0"
   host: "127.0.0.1"
   port: 5678
@@ -55,10 +55,10 @@ instances:
     ca_file: ""
 ```
 
-`LISTEN_ADDRESS` and `LISTEN_PORT` override listener settings. There is deliberately no global `SAFELINE_API_TOKEN`: every instance uses a separate token file.
+`LISTEN_ADDRESS` and `LISTEN_PORT` override listener settings. There is deliberately no global `HCW_API_TOKEN`: every instance uses a separate token file.
 
 `ca_file` is the certificate authority that signed the certificate of the
-instance. A SafeLine console serves the certificate it generated for itself,
+instance. A HiTechCloud WAF console serves the certificate it generated for itself,
 which no public authority signed: point `ca_file` at that certificate (or at the
 authority that issued it) and the connection stays verified. Relative paths are
 resolved from the directory of the configuration file.
@@ -69,11 +69,11 @@ is loopback (`127.0.0.1`, `localhost`, `::1`).
 
 Each `display_name` must be unique, ignoring letter case, and must not match another instance's `id`. During server discovery (or legacy initialization), the server publishes only the `display_name` to `instance_id` mappings as Server Instructions. This lets a user refer to a friendly name while the AI still calls `get_attack_events` with the stable, explicit `instance_id`. Instance addresses and credentials are never included in those instructions.
 
-SafeLine CE does not yet provide a dedicated read-only service credential for all required management APIs. This release therefore uses an administrator API Token per instance, while the MCP process enforces the fixed read-only API allowlist.
+HiTechCloud WAF does not yet provide a dedicated read-only service credential for all required management APIs. This release therefore uses an administrator API Token per instance, while the MCP process enforces the fixed read-only API allowlist.
 
 ## AI client authentication
 
-MCP client authentication is independent from the downstream SafeLine API Tokens.
+MCP client authentication is independent from the downstream HiTechCloud WAF API Tokens.
 
 Authentication is on by default: the server always installs the bearer gate
 unless a deployment explicitly opts out, and it refuses to start without a token
@@ -134,14 +134,14 @@ MCP_AUTH_DISABLED=true
    ```
 
 2. Prefer protected deployment directories outside the source checkout, then
-   create one SafeLine token file per instance:
+   create one HiTechCloud WAF token file per instance:
 
    ```bash
-   install -d -m 700 /etc/safeline-mcp/secrets /var/lib/safeline-mcp
-   install -m 600 /path/to/production-a.token /etc/safeline-mcp/secrets/production-a.token
-   install -m 600 /path/to/production-b.token /etc/safeline-mcp/secrets/production-b.token
-   export SAFELINE_MCP_SECRETS_DIR=/etc/safeline-mcp/secrets
-   export SAFELINE_MCP_STATE_DIR=/var/lib/safeline-mcp
+   install -d -m 700 /etc/hitechcloud-waf-mcp/secrets /var/lib/hitechcloud-waf-mcp
+   install -m 600 /path/to/production-a.token /etc/hitechcloud-waf-mcp/secrets/production-a.token
+   install -m 600 /path/to/production-b.token /etc/hitechcloud-waf-mcp/secrets/production-b.token
+   export HCW_MCP_SECRETS_DIR=/etc/hitechcloud-waf-mcp/secrets
+   export HCW_MCP_STATE_DIR=/var/lib/hitechcloud-waf-mcp
    ```
 
    For local-only development, `./secrets` and `./state` are accepted and are
@@ -201,4 +201,4 @@ Unknown input fields and fractional integers are rejected by server-side JSON Sc
 - `nodes`
 - `total`
 
-SafeLine HTTP failures, HTTP-200 envelopes with a non-empty `err`, unknown instances, and input validation failures are returned as MCP Tool Execution Errors with `result.isError=true`. The MCP server does not interpret human-readable `msg` content when `err` is empty or absent.
+HiTechCloud WAF HTTP failures, HTTP-200 envelopes with a non-empty `err`, unknown instances, and input validation failures are returned as MCP Tool Execution Errors with `result.isError=true`. The MCP server does not interpret human-readable `msg` content when `err` is empty or absent.

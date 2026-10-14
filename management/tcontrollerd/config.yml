@@ -4,7 +4,7 @@ log:
   level:  debug               # "debug", "info", "warn" or "error"
 mgt_addr: 169.254.0.4:9002        # gRPC addr of mgt-api webserver
 # Shared secret of the control channel. mgt-api creates it in a directory that
-# both containers mount (see the safeLine compose file); set MGT_TOKEN_FILE to
+# both containers mount (see the HiTechCloud WAF compose file); set MGT_TOKEN_FILE to
 # point somewhere else, or TCD_MGT_TOKEN to pass the value through the
 # environment instead.
 # mgt_token_file: /app/sock/mgt_grpc_token

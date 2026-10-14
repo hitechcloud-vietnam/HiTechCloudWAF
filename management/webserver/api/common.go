@@ -12,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rogpeppe/go-internal/semver"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api/response"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api/response"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/utils"
 )
 
 const VersionInfoEntrypoint = "/release/latest/version.json"

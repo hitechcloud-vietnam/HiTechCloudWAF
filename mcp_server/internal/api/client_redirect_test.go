@@ -80,14 +80,14 @@ func TestSameOrigin(t *testing.T) {
 		base, target string
 		want         bool
 	}{
-		{"https://safeline.example:9443", "https://safeline.example:9443/other", true},
-		{"https://safeline.example:9443", "https://SAFELINE.example:9443/other", true},
-		{"https://safeline.example", "https://safeline.example:443/other", true},
-		{"http://safeline.example", "http://safeline.example:80/other", true},
-		{"https://safeline.example", "http://safeline.example/other", false},
-		{"https://safeline.example", "https://safeline.example:8443/other", false},
-		{"https://safeline.example:9443", "https://evil.example:9443/other", false},
-		{"https://safeline.example:9443", "https://safeline.example.evil.example:9443/other", false},
+		{"https://waf.example:9443", "https://waf.example:9443/other", true},
+		{"https://waf.example:9443", "https://WAF.example:9443/other", true},
+		{"https://waf.example", "https://waf.example:443/other", true},
+		{"http://waf.example", "http://waf.example:80/other", true},
+		{"https://waf.example", "http://waf.example/other", false},
+		{"https://waf.example", "https://waf.example:8443/other", false},
+		{"https://waf.example:9443", "https://evil.example:9443/other", false},
+		{"https://waf.example:9443", "https://waf.example.evil.example:9443/other", false},
 	}
 
 	for _, c := range cases {

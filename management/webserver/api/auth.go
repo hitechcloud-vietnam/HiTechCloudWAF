@@ -16,12 +16,12 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api/response"
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/log"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/sessionopts"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api/response"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/sessionopts"
 )
 
 var logger = log.GetLogger("api")

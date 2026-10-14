@@ -11,22 +11,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/config"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/errors"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/errors"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
 const attackEventsPath = "/api/open/events"
 const maxTokenFileSize = 16 << 10
 
 // InstanceSource is safe to include in tool output and identifies the exact
-// SafeLine instance from which the data was read.
+// HiTechCloud WAF instance from which the data was read.
 type InstanceSource struct {
 	InstanceID  string `json:"instance_id"`
 	DisplayName string `json:"display_name"`
 }
 
-// APIClient is an independently authenticated client for one SafeLine instance.
+// APIClient is an independently authenticated client for one HiTechCloud WAF instance.
 type APIClient struct {
 	client *Client
 	source InstanceSource
@@ -42,7 +42,7 @@ type ClientRegistry struct {
 // NewClientRegistry constructs a registry without mutating global state.
 func NewClientRegistry(configs []*config.InstanceConfig) (*ClientRegistry, error) {
 	if len(configs) == 0 {
-		return nil, errors.New("at least one SafeLine instance is required")
+		return nil, errors.New("at least one HiTechCloud WAF instance is required")
 	}
 
 	registry := &ClientRegistry{
@@ -79,7 +79,7 @@ func (r *ClientRegistry) Get(instanceID string) (*APIClient, error) {
 	}
 	client, ok := r.clients[instanceID]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("unknown SafeLine instance %q", instanceID))
+		return nil, errors.New(fmt.Sprintf("unknown HiTechCloud WAF instance %q", instanceID))
 	}
 	return client, nil
 }
@@ -205,7 +205,7 @@ func (c *APIClient) Source() InstanceSource {
 	return c.source
 }
 
-// GetAttackEvents is the only SafeLine management request exposed by the
+// GetAttackEvents is the only HiTechCloud WAF management request exposed by the
 // client. The path and HTTP method are fixed rather than supplied by a tool.
 func (c *APIClient) GetAttackEvents(ctx context.Context, query url.Values, result any) error {
 	return c.client.get(ctx, attackEventsPath, query, result)

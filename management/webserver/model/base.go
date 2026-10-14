@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/log"
 )
 
 // Base is a replacement for gorm.Model without DeletedAt, which is considered to be not good.

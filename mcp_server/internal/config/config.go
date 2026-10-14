@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chaitin/SafeLine/mcp_server/pkg/errors"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,7 +19,7 @@ type Config struct {
 	Instances []*InstanceConfig `yaml:"instances"`
 }
 
-// InstanceConfig identifies one independently authenticated SafeLine instance.
+// InstanceConfig identifies one independently authenticated HiTechCloud WAF instance.
 // The API token is deliberately referenced through a file instead of being
 // embedded in the main configuration file.
 type InstanceConfig struct {
@@ -131,7 +131,7 @@ func Load(path string) error {
 
 func normalizeInstances(cfg *Config, configDir string) error {
 	if len(cfg.Instances) == 0 {
-		return errors.New("at least one SafeLine instance is required")
+		return errors.New("at least one HiTechCloud WAF instance is required")
 	}
 
 	seen := make(map[string]struct{}, len(cfg.Instances))
@@ -220,7 +220,7 @@ func GetLogger() *LoggerConfig {
 	return config.Logger
 }
 
-// GetInstances returns all configured SafeLine instances.
+// GetInstances returns all configured HiTechCloud WAF instances.
 func GetInstances() []*InstanceConfig {
 	if config == nil {
 		return nil

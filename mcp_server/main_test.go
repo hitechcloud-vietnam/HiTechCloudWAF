@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/auth"
-	"github.com/chaitin/SafeLine/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/auth"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
 )
 
 func TestAuthInitIsOneTimeAndRotateIsExplicit(t *testing.T) {
@@ -101,7 +101,7 @@ func TestAuthDisabledRefusesNonLoopbackListener(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	contents := `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 0.0.0.0
   port: 5678
@@ -145,7 +145,7 @@ func TestNonLoopbackListenerRequiresTLS(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	contents := `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 0.0.0.0
   port: 5678

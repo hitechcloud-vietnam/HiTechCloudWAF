@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/rpc"
-	"chaitin.cn/patronus/safeline-2/management/webserver/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/rpc"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/utils"
 )
 
 func GenCerts() error {

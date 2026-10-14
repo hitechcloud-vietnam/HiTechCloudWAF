@@ -5,9 +5,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api/response"
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api/response"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
 )
 
 type PostBehaviourRequest struct {

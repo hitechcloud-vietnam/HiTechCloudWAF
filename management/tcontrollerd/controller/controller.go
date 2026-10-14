@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/log"
-	pb "chaitin.cn/patronus/safeline-2/management/tcontrollerd/proto/website"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/log"
+	pb "github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/proto/website"
 )
 
 var (

@@ -8,12 +8,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/api"
-	"github.com/chaitin/SafeLine/mcp_server/internal/auth"
-	"github.com/chaitin/SafeLine/mcp_server/internal/config"
-	"github.com/chaitin/SafeLine/mcp_server/internal/tools"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
-	mcpserver "github.com/chaitin/SafeLine/mcp_server/pkg/mcp"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/api"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/auth"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/tools"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
+	mcpserver "github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/mcp"
 )
 
 func main() {
@@ -77,8 +77,8 @@ func printNewToken(output io.Writer, token string) {
 
 func buildServerInstructions(instances []*config.InstanceConfig) string {
 	var instructions strings.Builder
-	instructions.WriteString("This server exposes read-only SafeLine data. The get_attack_events tool requires an instance_id.\n")
-	instructions.WriteString("Configured SafeLine instance mappings:\n")
+	instructions.WriteString("This server exposes read-only HiTechCloud WAF data. The get_attack_events tool requires an instance_id.\n")
+	instructions.WriteString("Configured HiTechCloud WAF instance mappings:\n")
 	for _, instance := range instances {
 		instructions.WriteString(fmt.Sprintf(
 			"- display_name %q -> instance_id %q\n",
@@ -155,9 +155,9 @@ func runServer(args []string, stderr io.Writer) error {
 	}
 
 	instances := config.GetInstances()
-	logger.With("instances", len(instances)).Info("initializing SafeLine API clients")
+	logger.With("instances", len(instances)).Info("initializing HiTechCloud WAF API clients")
 	if err := api.InitInstances(instances); err != nil {
-		return fmt.Errorf("initialize SafeLine API clients: %w", err)
+		return fmt.Errorf("initialize HiTechCloud WAF API clients: %w", err)
 	}
 
 	var middleware []mcpserver.Middleware

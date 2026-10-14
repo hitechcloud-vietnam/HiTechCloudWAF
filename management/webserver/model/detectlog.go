@@ -8,9 +8,9 @@ import (
 
 	"chaitin.cn/dev/go/errors"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	"chaitin.cn/patronus/safeline-2/management/webserver/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/utils"
 )
 
 // DetectLog is designed to be used in response, not a good naming.

@@ -1,4 +1,4 @@
-module github.com/chaitin/SafeLine/mcp_server
+module github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server
 
 go 1.25.14
 

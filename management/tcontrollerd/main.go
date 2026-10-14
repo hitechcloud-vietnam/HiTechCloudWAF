@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/controller"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/cron"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/ngcmd"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/controller"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/cron"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/ngcmd"
 
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/log"
 )
 
 var (

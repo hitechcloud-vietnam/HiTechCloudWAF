@@ -11,12 +11,12 @@ import (
 
 	"gorm.io/gorm/clause"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	"chaitin.cn/patronus/safeline-2/management/webserver/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/utils"
 )
 
 type Options struct {

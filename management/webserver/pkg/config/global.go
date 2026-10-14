@@ -20,7 +20,7 @@ func DefaultGlobalConfig() Config {
 		Detector:     DefaultDetectorConfig(),
 		Telemetry:    DefaultTelemetryConfig(),
 		GPRC:         DefaultGRPCConfig(),
-		PlatformAddr: "https://waf-ce.chaitin.cn",
+		PlatformAddr: "", // HiTechCloud WAF: set platform_addr in config.yml to enable upgrade tips
 		MgtResDir:    "/resources/management",
 		NgxResDir:    "/resources/nginx",
 	}

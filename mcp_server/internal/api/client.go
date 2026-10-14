@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chaitin/SafeLine/mcp_server/pkg/errors"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/errors"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
 const (
@@ -48,7 +48,7 @@ func loadRootCAs(path string) (*x509.CertPool, error) {
 	return roots, nil
 }
 
-// Client is the transport used by a single SafeLine instance. Its request
+// Client is the transport used by a single HiTechCloud WAF instance. Its request
 // method is intentionally unexported; APIClient exposes only approved read-only
 // operations.
 type Client struct {
@@ -91,7 +91,7 @@ func newClient(baseURL string, timeout time.Duration, caFile, token string) (*Cl
 
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if caFile != "" {
-		// The console of a SafeLine installation serves a certificate that no
+		// The console of a HiTechCloud WAF installation serves a certificate that no
 		// public authority signed. Pinning the authority of the instance keeps
 		// verification on, which is what keeps the deployment token in the
 		// request header out of the hands of anything on the path.
@@ -120,7 +120,7 @@ func newClient(baseURL string, timeout time.Duration, caFile, token string) (*Cl
 		headers: make(http.Header),
 	}
 	client.headers.Set("Accept", "application/json")
-	client.headers.Set("User-Agent", "SafeLine-MCP/1.0")
+	client.headers.Set("User-Agent", "HiTechCloud-WAF-MCP/1.0")
 	client.headers.Set(tokenHeader, token)
 	return client, nil
 }
@@ -185,7 +185,7 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, result 
 		return errors.Wrap(err, "read response body failed")
 	}
 	if len(respBody) > maxResponseBodySize {
-		return errors.New("SafeLine response body exceeds the 4 MiB limit")
+		return errors.New("HiTechCloud WAF response body exceeds the 4 MiB limit")
 	}
 
 	var envelope struct {
@@ -204,7 +204,7 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, result 
 		if len(body) > maxErrorBodySize {
 			body = body[:maxErrorBodySize] + "..."
 		}
-		return errors.New(fmt.Sprintf("SafeLine request failed with status %d: %s", resp.StatusCode, body))
+		return errors.New(fmt.Sprintf("HiTechCloud WAF request failed with status %d: %s", resp.StatusCode, body))
 	}
 
 	if result == nil {

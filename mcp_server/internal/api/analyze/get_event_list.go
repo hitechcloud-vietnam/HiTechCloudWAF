@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/api"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/api"
 )
 
 type GetEventListRequest struct {

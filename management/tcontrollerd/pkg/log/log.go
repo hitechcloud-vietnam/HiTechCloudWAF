@@ -10,8 +10,8 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"chaitin.cn/dev/go/log"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/utils"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/utils"
 )
 
 func GetLogger(name string) *log.Logger {

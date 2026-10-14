@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// The console of a SafeLine installation serves the certificate it generated
+// The console of a HiTechCloud WAF installation serves the certificate it generated
 // for itself, so an MCP deployment that wants verification on has to be able to
 // name the authority of that instance. ca_file is that, and it exists so that
 // insecure_skip_verify is not the only way to reach an installation with a

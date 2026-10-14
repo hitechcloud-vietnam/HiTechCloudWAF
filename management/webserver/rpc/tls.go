@@ -11,8 +11,8 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
 )
 
 const (

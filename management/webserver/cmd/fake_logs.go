@@ -1,6 +1,6 @@
 package cmd
 
-import "chaitin.cn/patronus/safeline-2/management/webserver/model"
+import "github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
 
 func FakeLogs() {
 	model.InitDetectLogSamples()

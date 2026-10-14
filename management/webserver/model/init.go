@@ -3,7 +3,7 @@ package model
 import (
 	"gorm.io/gorm"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
 )
 
 func InitModels() error {

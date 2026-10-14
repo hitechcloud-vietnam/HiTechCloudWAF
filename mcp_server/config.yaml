@@ -1,5 +1,5 @@
 server:
-  name: "SafeLine MCP Server"
+  name: "HiTechCloud WAF MCP Server"
   version: "2.0.0"
   # LISTEN_ADDRESS and LISTEN_PORT can override these listener values.
   host: "127.0.0.1"
@@ -15,24 +15,24 @@ logger:
   caller: false
   development: false
 
-# SafeLine API Tokens remain administrator credentials in this release. Keep
+# HiTechCloud WAF API Tokens remain administrator credentials in this release. Keep
 # one token file per instance; the MCP server never returns them to clients.
 instances:
-  - id: "safeline-a"
-    display_name: "SafeLine A"
-    base_url: "https://safeline-a.example:9443"
-    token_file: "/run/secrets/safeline-a.token"
+  - id: "waf-node-a"
+    display_name: "HiTechCloud WAF A"
+    base_url: "https://waf-node-a.example:9443"
+    token_file: "/run/secrets/waf-node-a.token"
     timeout: 30
     debug: false
     # ca_file is the certificate authority that signed the certificate of the
-    # instance. A SafeLine console serves the certificate it generated for
+    # instance. A HiTechCloud WAF console serves the certificate it generated for
     # itself, which no public authority signed: point this at that certificate
     # (or at its CA) instead of switching the check off.
     ca_file: ""
-  - id: "safeline-b"
-    display_name: "SafeLine B"
-    base_url: "https://safeline-b.example:9443"
-    token_file: "/run/secrets/safeline-b.token"
+  - id: "waf-node-b"
+    display_name: "HiTechCloud WAF B"
+    base_url: "https://waf-node-b.example:9443"
+    token_file: "/run/secrets/waf-node-b.token"
     timeout: 30
     debug: false
     ca_file: ""

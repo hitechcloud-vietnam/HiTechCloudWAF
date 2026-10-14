@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api/response"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api/response"
 )
 
 // SameOrigin rejects cross-site state-changing requests using the Origin

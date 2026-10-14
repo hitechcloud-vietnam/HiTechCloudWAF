@@ -19,7 +19,7 @@ func writeConfigFile(t *testing.T, contents string) string {
 func TestLoadMultiInstanceConfiguration(t *testing.T) {
 	path := writeConfigFile(t, `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678
@@ -61,7 +61,7 @@ instances:
 
 func TestLoadRejectsDuplicateInstanceIDs(t *testing.T) {
 	path := writeConfigFile(t, `
-server: {name: SafeLine MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
+server: {name: HiTechCloud WAF MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
 logger: {level: info}
 instances:
   - id: duplicate
@@ -80,7 +80,7 @@ instances:
 
 func TestLoadRejectsDuplicateDisplayNames(t *testing.T) {
 	path := writeConfigFile(t, `
-server: {name: SafeLine MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
+server: {name: HiTechCloud WAF MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
 logger: {level: info}
 instances:
   - id: production-a
@@ -101,7 +101,7 @@ instances:
 
 func TestLoadRejectsDisplayNameConflictingWithAnotherInstanceID(t *testing.T) {
 	path := writeConfigFile(t, `
-server: {name: SafeLine MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
+server: {name: HiTechCloud WAF MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
 logger: {level: info}
 instances:
   - id: production-a
@@ -122,7 +122,7 @@ instances:
 
 func TestLoadRejectsInlineInstanceToken(t *testing.T) {
 	path := writeConfigFile(t, `
-server: {name: SafeLine MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
+server: {name: HiTechCloud WAF MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
 logger: {level: info}
 instances:
   - id: unsafe
@@ -138,11 +138,11 @@ instances:
 
 func TestLoadRequiresAtLeastOneInstance(t *testing.T) {
 	path := writeConfigFile(t, `
-server: {name: SafeLine MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
+server: {name: HiTechCloud WAF MCP, version: 1.0.0, host: 127.0.0.1, port: 5678}
 logger: {level: info}
 `)
 	err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "at least one SafeLine instance") {
+	if err == nil || !strings.Contains(err.Error(), "at least one HiTechCloud WAF instance") {
 		t.Fatalf("Load() error = %v, want missing instance error", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestLoadResolvesCAFileRelativeToTheConfiguration(t *testing.T) {
 
 	contents := `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678
@@ -185,7 +185,7 @@ instances:
 func TestLoadRejectsCAFileTogetherWithSkippedVerification(t *testing.T) {
 	path := writeConfigFile(t, `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678
@@ -195,7 +195,7 @@ instances:
   - id: dev152
     base_url: https://dev152:9443
     token_file: /run/secrets/dev152_token
-    ca_file: /etc/safeline/instance.crt
+    ca_file: /etc/hitechcloud-waf/instance.crt
     insecure_skip_verify: true
 `)
 
@@ -211,7 +211,7 @@ instances:
 func TestLoadRejectsInsecureSkipVerify(t *testing.T) {
 	path := writeConfigFile(t, `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678
@@ -232,7 +232,7 @@ instances:
 func TestLoadTLSCertFromEnv(t *testing.T) {
 	path := writeConfigFile(t, `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678
@@ -259,7 +259,7 @@ instances:
 func TestLoadEmptyTLSEnvDoesNotWipeYAML(t *testing.T) {
 	path := writeConfigFile(t, `
 server:
-  name: SafeLine MCP
+  name: HiTechCloud WAF MCP
   version: 1.0.0
   host: 127.0.0.1
   port: 5678

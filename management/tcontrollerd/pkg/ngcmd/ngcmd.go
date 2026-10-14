@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/log"
 )
 
 var logger = log.GetLogger("ngcmd")

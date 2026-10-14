@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
 var (

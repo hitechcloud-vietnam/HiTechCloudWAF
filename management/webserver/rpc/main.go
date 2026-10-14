@@ -8,8 +8,8 @@ import (
 
 	"chaitin.cn/dev/go/errors"
 	"chaitin.cn/dev/go/log"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
-	pb "chaitin.cn/patronus/safeline-2/management/webserver/proto/website"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
+	pb "github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/proto/website"
 )
 
 const (

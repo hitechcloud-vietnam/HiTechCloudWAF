@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/config"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
 func TestMain(m *testing.M) {
@@ -124,7 +124,7 @@ func TestClientRegistryRejectsUnknownInstanceAndEmptyToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientRegistry() error = %v", err)
 	}
-	if _, err := registry.Get("missing"); err == nil || !strings.Contains(err.Error(), "unknown SafeLine instance") {
+	if _, err := registry.Get("missing"); err == nil || !strings.Contains(err.Error(), "unknown HiTechCloud WAF instance") {
 		t.Fatalf("Get(missing) error = %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestClientRejectsUnsafeTokenFiles(t *testing.T) {
 	}
 }
 
-func TestClientLimitsSafeLineResponseBody(t *testing.T) {
+func TestClientLimitsResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", maxResponseBodySize+1)))
 	}))

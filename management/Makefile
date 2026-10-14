@@ -36,7 +36,7 @@ lint:
 # 'go list' needs to be executed before staticcheck to prepopulate the modules cache.
 # Otherwise staticcheck might fail randomly for some reason not yet explained.
 	$(GO) list -e -compiled -test=true -export=false -deps=true -find=false -tags= -- ./... > /dev/null
-	goimports -local chaitin.cn -w $$(find . -type f -name '*.go' -not -path "./vendor/*")
+	goimports -local github.com/hitechcloud-vietnam -w $$(find . -type f -name '*.go' -not -path "./vendor/*")
 	golangci-lint version
 	cd webserver && golangci-lint run -v --skip-dirs vendor --deadline 10m
 

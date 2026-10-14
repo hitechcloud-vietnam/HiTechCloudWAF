@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/api/analyze"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/errors"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/api/analyze"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/errors"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 	markmcp "github.com/mark3labs/mcp-go/mcp"
 )
 
 type GetAttackEventsParams struct {
-	InstanceID string `json:"instance_id" jsonschema_description:"Configured SafeLine instance ID"`
+	InstanceID string `json:"instance_id" jsonschema_description:"Configured HiTechCloud WAF instance ID"`
 	Page       int    `json:"page,omitempty" jsonschema_description:"Page number, starting at 1" default:"1"`
 	PageSize   int    `json:"page_size,omitempty" jsonschema_description:"Events per page, from 1 through 100" default:"10"`
 	IP         string `json:"ip,omitempty" jsonschema_description:"Source IP address, CIDR, or partial IP filter"`
@@ -29,7 +29,7 @@ func (t *GetAttackEvents) Name() string {
 }
 
 func (t *GetAttackEvents) Description() string {
-	return "Query aggregated attack events from one configured SafeLine instance"
+	return "Query aggregated attack events from one configured HiTechCloud WAF instance"
 }
 
 func (t *GetAttackEvents) InputSchemaOptions() []markmcp.ToolOption {
@@ -37,7 +37,7 @@ func (t *GetAttackEvents) InputSchemaOptions() []markmcp.ToolOption {
 		markmcp.WithString("instance_id",
 			markmcp.Required(),
 			markmcp.MinLength(1),
-			markmcp.Description("Configured SafeLine instance ID"),
+			markmcp.Description("Configured HiTechCloud WAF instance ID"),
 		),
 		markmcp.WithInteger("page",
 			markmcp.Min(1),
@@ -103,8 +103,8 @@ func (t *GetAttackEvents) Execute(ctx context.Context, params GetAttackEventsPar
 		End:        params.End,
 	})
 	if err != nil {
-		logger.With("instance_id", strings.TrimSpace(params.InstanceID)).With("error", err).Error("SafeLine event query failed")
-		return analyze.GetEventListResponse{}, fmt.Errorf("SafeLine query failed for instance %q", strings.TrimSpace(params.InstanceID))
+		logger.With("instance_id", strings.TrimSpace(params.InstanceID)).With("error", err).Error("HiTechCloud WAF event query failed")
+		return analyze.GetEventListResponse{}, fmt.Errorf("HiTechCloud WAF query failed for instance %q", strings.TrimSpace(params.InstanceID))
 	}
 	logger.With("total", resp.Total).Info("get attack events")
 	return *resp, nil

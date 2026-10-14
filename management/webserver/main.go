@@ -13,17 +13,17 @@ import (
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api"
-	"chaitin.cn/patronus/safeline-2/management/webserver/cmd"
-	"chaitin.cn/patronus/safeline-2/management/webserver/middleware"
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/cron"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/fvm"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/log"
-	"chaitin.cn/patronus/safeline-2/management/webserver/rpc"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/cmd"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/middleware"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/cron"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/fvm"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/log"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/rpc"
 )
 
 var (

@@ -7,14 +7,14 @@ import (
 
 	"gorm.io/gorm"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
 
 	"chaitin.cn/dev/go/errors"
 	"chaitin.cn/dev/go/log"
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/fvm/fsl"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/fvm/fsl"
 )
 
 const (

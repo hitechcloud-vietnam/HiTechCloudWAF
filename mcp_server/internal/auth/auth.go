@@ -23,7 +23,7 @@ const (
 	DisabledEnv  = "MCP_AUTH_DISABLED"
 	StateFileEnv = "MCP_AUTH_STATE_FILE"
 
-	DefaultStateFile = "/var/lib/safeline-mcp/auth.json"
+	DefaultStateFile = "/var/lib/hitechcloud-waf-mcp/auth.json"
 	stateVersion     = 1
 	tokenBytes       = 32
 	maxStateFileSize = 16 << 10
@@ -290,7 +290,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r.Header.Get("Authorization"))
 		if !ok || !a.Verify(token) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="safeline-mcp"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="hitechcloud-waf-mcp"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

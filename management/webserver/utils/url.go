@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/constants"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/constants"
 )
 
 func IsIPv6(str string) bool {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 	markmcp "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -130,7 +130,7 @@ func TestLegacyInitializeReturnsInstructions(t *testing.T) {
 		"params": map[string]any{
 			"protocolVersion": markmcp.ProtocolVersion20251125,
 			"clientInfo": map[string]any{
-				"name":    "safeline-mcp-legacy-test",
+				"name":    "hitechcloud-waf-mcp-legacy-test",
 				"version": "1.0.0",
 			},
 			"capabilities": map[string]any{},
@@ -178,7 +178,7 @@ func postModern(t *testing.T, url string, method markmcp.MCPMethod, params map[s
 	params["_meta"] = map[string]any{
 		markmcp.MetaKeyProtocolVersion: markmcp.ProtocolVersion20260728,
 		markmcp.MetaKeyClientInfo: map[string]any{
-			"name":    "safeline-mcp-test",
+			"name":    "hitechcloud-waf-mcp-test",
 			"version": "1.0.0",
 		},
 		markmcp.MetaKeyClientCapabilities: map[string]any{},

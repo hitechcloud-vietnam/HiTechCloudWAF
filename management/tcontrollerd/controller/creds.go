@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/tcontrollerd/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd/pkg/config"
 )
 
 const (

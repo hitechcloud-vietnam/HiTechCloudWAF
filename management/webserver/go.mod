@@ -1,4 +1,4 @@
-module chaitin.cn/patronus/safeline-2/management/webserver
+module github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver
 
 go 1.25.0
 

@@ -15,15 +15,15 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mcp-server .
 FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && install -d -m 700 /var/lib/safeline-mcp \
-    && install -d -m 755 /etc/safeline-mcp
+    && install -d -m 700 /var/lib/hitechcloud-waf-mcp \
+    && install -d -m 755 /etc/hitechcloud-waf-mcp
 
 COPY --from=builder /out/mcp-server /app/mcp-server
-COPY config.yaml /etc/safeline-mcp/config.yaml
+COPY config.yaml /etc/hitechcloud-waf-mcp/config.yaml
 
 ENV TZ=Asia/Shanghai
 
 EXPOSE 5678
 
 ENTRYPOINT ["/app/mcp-server"]
-CMD ["--config", "/etc/safeline-mcp/config.yaml"]
+CMD ["--config", "/etc/hitechcloud-waf-mcp/config.yaml"]

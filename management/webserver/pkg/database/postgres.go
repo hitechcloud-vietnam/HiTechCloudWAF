@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm/schema"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/config"
 )
 
 type PostgresDB struct {

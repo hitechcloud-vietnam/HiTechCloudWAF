@@ -1,4 +1,4 @@
-module chaitin.cn/patronus/safeline-2/management/tcontrollerd
+module github.com/hitechcloud-vietnam/HiTechCloudWAF/management/tcontrollerd
 
 go 1.25.0
 

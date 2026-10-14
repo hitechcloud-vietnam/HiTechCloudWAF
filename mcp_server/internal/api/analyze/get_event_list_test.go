@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chaitin/SafeLine/mcp_server/internal/api"
-	"github.com/chaitin/SafeLine/mcp_server/internal/config"
-	"github.com/chaitin/SafeLine/mcp_server/pkg/logger"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/api"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/internal/config"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server/pkg/logger"
 )
 
-func TestGetEventListUsesCurrentSafeLineQueryAndReturnsSource(t *testing.T) {
+func TestGetEventListUsesCurrentQueryAndReturnsSource(t *testing.T) {
 	if err := logger.Init(&logger.Config{Level: "error"}); err != nil {
 		t.Fatal(err)
 	}

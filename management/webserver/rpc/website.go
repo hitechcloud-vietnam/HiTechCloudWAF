@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"chaitin.cn/dev/go/errors"
-	"chaitin.cn/patronus/safeline-2/management/webserver/model"
-	"chaitin.cn/patronus/safeline-2/management/webserver/pkg/database"
-	pb "chaitin.cn/patronus/safeline-2/management/webserver/proto/website"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/model"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/pkg/database"
+	pb "github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/proto/website"
 )
 
 var (

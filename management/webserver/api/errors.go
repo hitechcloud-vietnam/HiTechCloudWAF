@@ -3,7 +3,7 @@ package api
 import (
 	"chaitin.cn/dev/go/errors"
 
-	"chaitin.cn/patronus/safeline-2/management/webserver/api/response"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/management/webserver/api/response"
 )
 
 // Errors whose message is meant for the administrator. Everything else that
