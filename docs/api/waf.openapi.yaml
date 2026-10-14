@@ -907,7 +907,7 @@ paths:
       operationId: listUsers
       summary: List console users
       description: Secrets (password hashes, TOTP secrets) are never returned.
-      x-required-role: viewer
+      x-required-role: admin
       responses:
         "200":
           description: Users (empty when accounts are not enabled).
@@ -1058,6 +1058,109 @@ paths:
                 type: string
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/open/cache:
+    get:
+      tags: [monitoring]
+      operationId: getCacheStats
+      summary: Response cache usage
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Objects and bytes held by the shared response cache.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          objects:
+                            type: integer
+                          bytes:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/open/cache/purge:
+    post:
+      tags: [sites]
+      operationId: purgeCache
+      summary: Remove cached responses
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                site_id:
+                  type: integer
+                  description: 0 = every site.
+                prefix:
+                  type: string
+                  description: Request URI prefix (path and query), "" = everything.
+      responses:
+        "200":
+          description: Number of objects removed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          removed:
+                            type: integer
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/open/threatintel:
+    get:
+      tags: [monitoring]
+      operationId: getThreatIntel
+      summary: Status of the threat-intelligence feeds
+      x-required-role: viewer
+      responses:
+        "200":
+          description: One entry per configured feed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          feeds:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name: {type: string}
+                                url: {type: string}
+                                refresh_sec: {type: integer}
+                                entries: {type: integer}
+                                ranges: {type: integer}
+                                invalid_lines: {type: integer}
+                                source: {type: string, enum: ["", cache, download]}
+                                updated_at: {type: string, format: date-time}
+                                checked_at: {type: string, format: date-time}
+                                next_at: {type: string, format: date-time}
+                                last_error: {type: string}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
 components:
   securitySchemes:

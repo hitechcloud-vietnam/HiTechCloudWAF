@@ -40,6 +40,8 @@ tags:
     description: Cluster-wide security events
   - name: sync
     description: Configuration replication from the primary engine
+  - name: dns
+    description: Static DNS records served by the DNS servers.
 
 paths:
   /:
@@ -371,6 +373,131 @@ paths:
               schema:
                 type: string
 
+  /v1/dns/records:
+    get:
+      tags: [dns]
+      operationId: listDNSRecords
+      summary: Static DNS records (polled by DNS servers)
+      description: Supports `If-None-Match` with the returned `ETag`.
+      security:
+        - dnsToken: []
+        - adminToken: []
+      x-required-token: dns or admin
+      parameters:
+        - name: zone
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Records and the record serial.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecordSet"
+        "304":
+          description: Not modified since the given ETag.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [dns]
+      operationId: createDNSRecord
+      summary: Create a static DNS record
+      security:
+        - adminToken: []
+      x-required-token: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DNSRecord"
+      responses:
+        "201":
+          description: Created record (with id).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: CNAME next to other data, or duplicate record.
+  /v1/dns/records/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [dns]
+      operationId: getDNSRecord
+      summary: One static DNS record
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: The record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [dns]
+      operationId: updateDNSRecord
+      summary: Replace a static DNS record
+      security:
+        - adminToken: []
+      x-required-token: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DNSRecord"
+      responses:
+        "200":
+          description: Updated record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: CNAME next to other data, or duplicate record.
+    delete:
+      tags: [dns]
+      operationId: deleteDNSRecord
+      summary: Delete a static DNS record
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     adminToken:
@@ -413,6 +540,43 @@ components:
             type: string
 
   schemas:
+    DNSRecord:
+      type: object
+      required: [zone, name, type, value]
+      properties:
+        id:
+          type: string
+          readOnly: true
+        zone:
+          type: string
+          example: waf.example.vn
+        name:
+          type: string
+          description: Relative to the zone; "@" for the apex, "*.app" for a wildcard.
+        type:
+          type: string
+          enum: [A, AAAA, CNAME, TXT, MX, NS, SRV, CAA]
+        value:
+          type: string
+          description: Zone file syntax, e.g. "10 mail.example.vn." for MX.
+        ttl:
+          type: integer
+          description: 0 = zone default.
+        comment:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+    DNSRecordSet:
+      type: object
+      properties:
+        serial:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecord"
     Brand:
       type: object
       description: Field names are capitalised (the type has no JSON tags).
