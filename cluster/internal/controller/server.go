@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -44,10 +45,11 @@ type SnapshotResponse struct {
 
 // Server is the controller.
 type Server struct {
-	cfg   *config.Controller
-	store *Store
-	log   *slog.Logger
-	probe *http.Client
+	cfg     *config.Controller
+	store   *Store
+	records *RecordStore
+	log     *slog.Logger
+	probe   *http.Client
 
 	primary *engine.Client
 
@@ -67,10 +69,19 @@ func New(cfg *config.Controller, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load state: %w", err)
 	}
+	recPath := cfg.DNSRecordsFile
+	if recPath == "" && cfg.StateFile != "" {
+		recPath = filepath.Join(filepath.Dir(cfg.StateFile), "dns-records.json")
+	}
+	recs, err := NewRecordStore(recPath)
+	if err != nil {
+		return nil, fmt.Errorf("load dns records: %w", err)
+	}
 	s := &Server{
-		cfg:   cfg,
-		store: st,
-		log:   log,
+		cfg:     cfg,
+		store:   st,
+		records: recs,
+		log:     log,
 		probe: &http.Client{
 			Timeout: cfg.ProbeTimeout.Duration,
 			Transport: &http.Transport{
@@ -105,6 +116,9 @@ func New(cfg *config.Controller, log *slog.Logger) (*Server, error) {
 // Store exposes the registry (used by tests).
 func (s *Server) Store() *Store { return s.store }
 
+// Records exposes the static DNS records (used by tests).
+func (s *Server) Records() *RecordStore { return s.records }
+
 // Handler returns the HTTP routes.
 func (s *Server) Handler() http.Handler {
 	admin := func(h http.HandlerFunc) http.Handler { return auth.Require(h, s.cfg.AdminToken) }
@@ -130,6 +144,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/pools/{pool}/endpoints", dns(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.store.Endpoints(r.PathValue("pool")))
 	}))
+	mux.Handle("GET /v1/dns/records", dns(s.listRecords))
+	mux.Handle("POST /v1/dns/records", admin(s.createRecord))
+	mux.Handle("GET /v1/dns/records/{id}", admin(s.getRecord))
+	mux.Handle("PUT /v1/dns/records/{id}", admin(s.updateRecord))
+	mux.Handle("DELETE /v1/dns/records/{id}", admin(s.deleteRecord))
 	return securityHeaders(mux)
 }
 
@@ -359,6 +378,80 @@ func (s *Server) pools(w http.ResponseWriter, _ *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Pool < out[j].Pool })
 	writeJSON(w, http.StatusOK, out)
+}
+
+// listRecords serves the static DNS records. DNS servers poll it with
+// If-None-Match so an unchanged set costs a 304.
+func (s *Server) listRecords(w http.ResponseWriter, r *http.Request) {
+	set := s.records.Set(r.URL.Query().Get("zone"))
+	etag := fmt.Sprintf(`"%d"`, set.Serial)
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writeJSON(w, http.StatusOK, set)
+}
+
+func (s *Server) getRecord(w http.ResponseWriter, r *http.Request) {
+	rec, ok := s.records.Get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
+	var rec api.DNSRecord
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&rec); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	rec, err := s.records.Create(rec)
+	if err != nil {
+		recordError(w, r, err)
+		return
+	}
+	s.log.Info("dns record created", "id", rec.ID, "zone", rec.Zone, "name", rec.Name, "type", rec.Type)
+	writeJSON(w, http.StatusCreated, rec)
+}
+
+func (s *Server) updateRecord(w http.ResponseWriter, r *http.Request) {
+	var rec api.DNSRecord
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&rec); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	rec, err := s.records.Update(r.PathValue("id"), rec)
+	if err != nil {
+		recordError(w, r, err)
+		return
+	}
+	s.log.Info("dns record updated", "id", rec.ID, "zone", rec.Zone, "name", rec.Name, "type", rec.Type)
+	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) deleteRecord(w http.ResponseWriter, r *http.Request) {
+	if err := s.records.Delete(r.PathValue("id")); err != nil {
+		recordError(w, r, err)
+		return
+	}
+	s.log.Info("dns record deleted", "id", r.PathValue("id"))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func recordError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		http.NotFound(w, r)
+	case errors.Is(err, errInvalidRecord):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, errRecordConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) syncStatus(w http.ResponseWriter, _ *http.Request) {

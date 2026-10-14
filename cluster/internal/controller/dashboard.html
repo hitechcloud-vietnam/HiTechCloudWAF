@@ -24,10 +24,11 @@
   th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
   .pill { padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
   .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
-  button, input { font:inherit; }
+  button, input, select { font:inherit; }
   button { background:var(--brand); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
   button.ghost { background:transparent; color:var(--brand); border:1px solid var(--brand); }
-  input { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  input, select { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  .form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
   h2 { font-size:16px; margin:22px 0 10px; }
   #login { max-width:420px; margin:60px auto; }
   .err { color:var(--bad); }
@@ -71,6 +72,25 @@
       <thead><tr><th>Pool</th><th>Healthy</th><th>Endpoints</th></tr></thead>
       <tbody id="pools"></tbody>
     </table></div>
+    <h2>Bản ghi DNS tĩnh</h2>
+    <div class="card form">
+      <input id="r-zone" placeholder="Zone, vd. waf.example.vn" list="r-zones" style="width:200px">
+      <datalist id="r-zones"></datalist>
+      <input id="r-name" placeholder="Tên: @, www, *.app" style="width:150px">
+      <select id="r-type"><option>A</option><option>AAAA</option><option>CNAME</option><option>TXT</option><option>MX</option><option>NS</option><option>SRV</option><option>CAA</option></select>
+      <input id="r-value" placeholder="Giá trị" style="flex:1; min-width:220px">
+      <input id="r-ttl" type="number" min="0" placeholder="TTL" style="width:90px" title="0 = TTL mặc định của zone">
+      <input id="r-comment" placeholder="Ghi chú" style="width:150px">
+      <button id="r-save">Thêm</button>
+      <button class="ghost" id="r-cancel" hidden>Huỷ</button>
+      <span class="muted" id="r-hint" style="flex-basis:100%"></span>
+      <span class="err" id="r-err"></span>
+    </div>
+    <div class="wrap"><table>
+      <thead><tr><th>Zone</th><th>Tên</th><th>Loại</th><th>Giá trị</th><th>TTL</th><th>Ghi chú</th><th></th></tr></thead>
+      <tbody id="records"></tbody>
+    </table></div>
+    <p class="muted">Bản ghi pool và bản ghi khai báo trong <code>dns.yaml</code> của từng DNS server không hiển thị ở đây; khi trùng tên, cấu hình trong file được ưu tiên.</p>
     <p class="muted" id="err"></p>
   </div>
 </main>
@@ -139,15 +159,63 @@
       pb.appendChild(tr);
     });
   }
+  var HINTS = {
+    A: "Địa chỉ IPv4, vd. 203.0.113.10", AAAA: "Địa chỉ IPv6, vd. 2001:db8::10",
+    CNAME: "Tên đích, vd. edge.waf.example.vn. (không dùng tại @; tên không có dấu chấm cuối được hiểu là trong zone)",
+    TXT: "Văn bản, vd. v=spf1 include:_spf.example.vn -all",
+    MX: "Ưu tiên + mail server, vd. 10 mail.example.vn.", NS: "Name server, vd. ns1.example.net. (đặt dưới @ để ủy quyền subdomain)",
+    SRV: "Ưu tiên trọng số cổng đích, vd. 10 60 5060 sip.example.vn.", CAA: "Cờ tag giá trị, vd. 0 issue \"letsencrypt.org\""
+  };
+  var editing = null;
+  function hint() { $("r-hint").textContent = HINTS[$("r-type").value] || ""; }
+  function resetForm() {
+    editing = null; ["r-name", "r-value", "r-ttl", "r-comment"].forEach(function (id) { $(id).value = ""; });
+    $("r-save").textContent = "Thêm"; $("r-cancel").hidden = true; $("r-err").textContent = ""; hint();
+  }
+  function editRecord(r) {
+    editing = r.id; $("r-zone").value = r.zone; $("r-name").value = r.name; $("r-type").value = r.type;
+    $("r-value").value = r.value; $("r-ttl").value = r.ttl || ""; $("r-comment").value = r.comment || "";
+    $("r-save").textContent = "Lưu"; $("r-cancel").hidden = false; $("r-err").textContent = ""; hint(); $("r-value").focus();
+  }
+  function saveRecord() {
+    var body = { zone: $("r-zone").value.trim(), name: $("r-name").value.trim() || "@", type: $("r-type").value,
+      value: $("r-value").value.trim(), ttl: parseInt($("r-ttl").value, 10) || 0, comment: $("r-comment").value.trim() };
+    api(editing ? "PUT" : "POST", "/v1/dns/records" + (editing ? "/" + encodeURIComponent(editing) : ""), body)
+      .then(function () { resetForm(); load(); }).catch(function (e) { $("r-err").textContent = String(e.message || e); });
+  }
+  function renderRecords(set) {
+    var tb = $("records"), zones = {}; tb.textContent = "";
+    set.records.forEach(function (r) {
+      zones[r.zone] = true;
+      var tr = document.createElement("tr");
+      tr.appendChild(td(r.zone)); tr.appendChild(td(r.name)); tr.appendChild(td(r.type));
+      var v = td(r.value.length > 80 ? r.value.slice(0, 80) + "…" : r.value); v.title = r.value; tr.appendChild(v);
+      tr.appendChild(td(r.ttl ? String(r.ttl) : "mặc định")); tr.appendChild(td(r.comment || ""));
+      var act = document.createElement("td");
+      var e = document.createElement("button"); e.className = "ghost"; e.textContent = "Sửa"; e.onclick = function () { editRecord(r); };
+      var d = document.createElement("button"); d.className = "ghost"; d.textContent = "Xoá"; d.style.marginLeft = "6px";
+      d.onclick = function () { if (confirm("Xoá bản ghi " + r.type + " " + r.name + "." + r.zone + "?")) api("DELETE", "/v1/dns/records/" + encodeURIComponent(r.id)).then(function () { if (editing === r.id) resetForm(); load(); }).catch(err); };
+      act.appendChild(e); act.appendChild(d); tr.appendChild(act);
+      tb.appendChild(tr);
+    });
+    if (!set.records.length) { var tr = document.createElement("tr"); var c = td("Chưa có bản ghi."); c.colSpan = 7; tr.appendChild(c); tb.appendChild(tr); }
+    var dl = $("r-zones"); dl.textContent = "";
+    Object.keys(zones).sort().forEach(function (z) { var o = document.createElement("option"); o.value = z; dl.appendChild(o); });
+  }
   function err(e) { $("err").textContent = String(e.message || e); }
   function load() {
     if (!token()) return;
-    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync"), api("GET", "/v1/events?limit=50")])
-      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); renderEvents(r[3]); }).catch(err);
+    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync"), api("GET", "/v1/events?limit=50"), api("GET", "/v1/dns/records")])
+      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); renderEvents(r[3]); renderRecords(r[4]); }).catch(err);
   }
   $("go").onclick = function () { setToken($("tok").value.trim()); $("tok").value = ""; show(); load(); };
   $("tok").onkeydown = function (e) { if (e.key === "Enter") $("go").onclick(); };
   $("logout").onclick = function () { setToken(""); show(); };
+  $("r-type").onchange = hint;
+  $("r-save").onclick = saveRecord;
+  $("r-value").onkeydown = function (e) { if (e.key === "Enter") saveRecord(); };
+  $("r-cancel").onclick = resetForm;
+  hint();
   $("sync").onclick = function () { api("POST", "/v1/sync").then(function () { setTimeout(load, 1500); }).catch(err); };
   show(); load(); setInterval(load, 5000);
 })();

@@ -135,9 +135,12 @@ type Controller struct {
 	// NodeToken is shared by agents to register and fetch configuration.
 	NodeToken     string `yaml:"node_token"`
 	NodeTokenFile string `yaml:"node_token_file"`
-	// DNSToken lets DNS servers read pool endpoints only.
+	// DNSToken lets DNS servers read pool endpoints and static records only.
 	DNSToken     string `yaml:"dns_token"`
 	DNSTokenFile string `yaml:"dns_token_file"`
+	// DNSRecordsFile persists the static DNS records managed through the
+	// API. Defaults to dns-records.json next to state_file.
+	DNSRecordsFile string `yaml:"dns_records_file"`
 
 	HeartbeatTimeout Duration `yaml:"heartbeat_timeout"`
 	ProbeInterval    Duration `yaml:"probe_interval"`
@@ -208,7 +211,18 @@ type DNS struct {
 	Token         string   `yaml:"token"`
 	TokenFile     string   `yaml:"token_file"`
 	Refresh       Duration `yaml:"refresh"`
-	Zones         []Zone   `yaml:"zones"`
+	// GeoIPDB is an optional MaxMind/DB-IP country database (.mmdb) used by
+	// prefer_country rules. It is reloaded when the file changes.
+	GeoIPDB string `yaml:"geoip_db"`
+	// Pools holds defaults applied to every record of a pool.
+	Pools map[string]PoolPolicy `yaml:"pools"`
+	Zones []Zone                `yaml:"zones"`
+}
+
+// PoolPolicy is the routing policy shared by the records of one pool.
+type PoolPolicy struct {
+	// PreferCountry applies to records of the pool without their own rules.
+	PreferCountry []CountryRule `yaml:"prefer_country"`
 }
 
 // Zone is one authoritative zone.
@@ -221,11 +235,18 @@ type Zone struct {
 	Records    []Record `yaml:"records"`
 }
 
-// Record is either static (Type + Value) or dynamic (Pool).
+// Record is either static (Type + Value) or dynamic (Pool). Static records
+// can also be managed through the controller API.
 type Record struct {
-	Name string `yaml:"name"` // relative to the zone, "@" for apex
-	Type string `yaml:"type"` // A, AAAA, CNAME, TXT, MX, NS (static only)
-	// Value is the static data. For MX: "10 mail.example.com.".
+	// Name is relative to the zone: "@" for the apex, "*.app" for a
+	// wildcard.
+	Name string `yaml:"name"`
+	// Type is A, AAAA, CNAME, TXT, MX, NS, SRV or CAA (A/AAAA for pools).
+	Type string `yaml:"type"`
+	// Value is the static data in zone file syntax, e.g. MX
+	// "10 mail.example.com.", SRV "10 60 5060 sip.example.com.", CAA
+	// `0 issue "letsencrypt.org"`. Names without a trailing dot are relative
+	// to the zone.
 	Value string `yaml:"value"`
 	TTL   uint32 `yaml:"ttl"`
 
@@ -237,6 +258,10 @@ type Record struct {
 	// PreferRegion maps client subnets (CIDR, matched against EDNS client
 	// subnet or the resolver address) to node regions.
 	PreferRegion []RegionRule `yaml:"prefer_region"`
+	// PreferCountry maps the client country or continent (GeoIP of the EDNS
+	// client subnet or the resolver address) to node regions. It is tried
+	// after prefer_region and needs dns.geoip_db.
+	PreferCountry []CountryRule `yaml:"prefer_country"`
 	// FailOpen answers with every node of the pool when none is healthy,
 	// instead of an empty answer.
 	FailOpen bool `yaml:"fail_open"`
@@ -246,6 +271,15 @@ type Record struct {
 type RegionRule struct {
 	CIDR   string `yaml:"cidr"`
 	Region string `yaml:"region"`
+}
+
+// CountryRule routes clients located in Countries (ISO 3166-1 alpha-2,
+// e.g. VN) or Continents (AF, AN, AS, EU, NA, OC, SA) to Region. Country
+// matches win over continent matches.
+type CountryRule struct {
+	Countries  []string `yaml:"countries"`
+	Continents []string `yaml:"continents"`
+	Region     string   `yaml:"region"`
 }
 
 // File is the top level configuration file.

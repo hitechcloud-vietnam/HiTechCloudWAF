@@ -136,6 +136,30 @@ type Snapshot struct {
 	Resources map[string][]json.RawMessage `json:"resources"`
 }
 
+// DNSRecord is a static DNS record managed through the controller and served
+// by every DNS server authoritative for Zone.
+type DNSRecord struct {
+	ID   string `json:"id"`
+	Zone string `json:"zone"`
+	// Name is relative to the zone: "@" for the apex, "*.app" for a
+	// wildcard.
+	Name string `json:"name"`
+	Type string `json:"type"`
+	// Value is in zone file syntax, e.g. "10 mail.example.vn." for MX.
+	Value string `json:"value"`
+	// TTL 0 means the zone default.
+	TTL       uint32    `json:"ttl,omitempty"`
+	Comment   string    `json:"comment,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// DNSRecordSet is the controller's answer for GET /v1/dns/records. Serial
+// increases on every change and feeds the SOA serial of the DNS servers.
+type DNSRecordSet struct {
+	Serial  uint32      `json:"serial"`
+	Records []DNSRecord `json:"records"`
+}
+
 // NodePatch is the admin request body for PATCH /v1/nodes/{id}.
 type NodePatch struct {
 	Drain          *bool `json:"drain,omitempty"`

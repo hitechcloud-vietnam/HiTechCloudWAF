@@ -111,9 +111,13 @@ func TestFailOpenAndClosed(t *testing.T) {
 
 func TestStaticNXDOMAINAndRefused(t *testing.T) {
 	s := newDNS(t)
+	// In-zone CNAMEs are followed: the CNAME then the healthy pool nodes.
 	m := query(s, "shop.example.vn.", dns.TypeA, "192.0.2.1")
-	if len(m.Answer) != 1 || m.Answer[0].Header().Rrtype != dns.TypeCNAME {
+	if len(m.Answer) != 3 || m.Answer[0].Header().Rrtype != dns.TypeCNAME || len(ips(m)) != 2 {
 		t.Fatalf("CNAME = %v", m.Answer)
+	}
+	if m := query(s, "shop.example.vn.", dns.TypeCNAME, "192.0.2.1"); len(m.Answer) != 1 {
+		t.Fatalf("CNAME query = %v", m.Answer)
 	}
 	if m := query(s, "example.vn.", dns.TypeNS, "192.0.2.1"); len(m.Answer) != 2 {
 		t.Fatalf("NS = %v", m.Answer)

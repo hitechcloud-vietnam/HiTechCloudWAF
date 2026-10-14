@@ -4,7 +4,23 @@ dns:
   controller_url: https://controller.example.vn:7443
   controller_ca: /etc/hcw/tls/ca.crt
   token_file: /etc/hcw/secrets/dns.token
-  refresh: 5s
+  refresh: 5s                # pools, static records (from the controller) and geoip_db
+
+  # Optional country database (GeoLite2-Country or DB-IP Country Lite, .mmdb)
+  # for prefer_country rules. Replacing the file reloads it automatically.
+  # Without it, country rules are ignored.
+  geoip_db: /etc/hcw/geoip/country.mmdb
+
+  # Defaults for every record of a pool (a record's own prefer_country
+  # replaces them). Country matches win over continent matches; a region
+  # without a healthy node falls back to all healthy nodes.
+  pools:
+    web:
+      prefer_country:
+        - {countries: [VN], region: hn}
+        - {countries: [TH, LA, KH, MY, SG, ID, PH], region: hcm}
+        - {continents: [AS, OC], region: hcm}
+
   zones:
     - name: waf.hitechcloud.vn
       ns: [ns1.waf.hitechcloud.vn, ns2.waf.hitechcloud.vn]
@@ -18,8 +34,20 @@ dns:
           pool: web
           max_answers: 2
           fail_open: true
+          # CIDR rules are tried before the pool's prefer_country rules.
           prefer_region:
             - {cidr: 14.160.0.0/11, region: hn}    # example ISP ranges
             - {cidr: 113.160.0.0/11, region: hcm}
         - {name: edge, type: AAAA, pool: web}
         - {name: customer-a, type: CNAME, value: edge.waf.hitechcloud.vn.}
+        # Wildcard: any <name>.cdn.waf.hitechcloud.vn without its own record
+        - {name: "*.cdn", pool: web}
+        # Static records (more can be managed on the controller dashboard or
+        # through /v1/dns/records; on a name clash this file wins).
+        - {name: "@", type: MX, value: "10 mail.hitechcloud.vn."}
+        - {name: "@", type: TXT, value: "v=spf1 include:_spf.hitechcloud.vn -all"}
+        - {name: "@", type: CAA, value: '0 issue "letsencrypt.org"'}
+        - {name: _sip._tcp, type: SRV, value: "10 60 5060 sip.hitechcloud.vn."}
+        # Delegate a subdomain to other name servers (with glue).
+        - {name: lab, type: NS, value: ns.lab}
+        - {name: ns.lab, type: A, value: 192.0.2.53}
