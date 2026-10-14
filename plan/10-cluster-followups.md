@@ -10,3 +10,4 @@
 | 4 | DNSSEC, zone transfer (AXFR/IXFR có TSIG) cho DNS phụ ngoài. | thấp |
 | 5 | Bản ghi controller nhắm sub-zone thông qua zone cha. | thấp |
 | 6 | Log "agent started" in hostname thay vì node ID trước lần đăng ký đầu (thẩm mỹ). | thấp |
+| 7 | `install.sh`: khi chạy lại (nâng cấp) đang **ghi đè** `controller.yaml`, `agent.yaml`, `dns.yaml` từ mẫu, làm mất chỉnh sửa tay. Nên giữ file cũ (như `waf.yaml`), ghi bản mới thành `*.yaml.new` và in thông báo; thêm cờ `--force-config`. Cập nhật `docs/deploy.vi.md` mục nâng cấp + `docs/en/`. | cao |
