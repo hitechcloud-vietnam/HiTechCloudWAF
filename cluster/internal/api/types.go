@@ -98,7 +98,17 @@ type Node struct {
 	// Healthy is derived: fresh heartbeat, engine healthy and probe passing.
 	Healthy bool   `json:"healthy"`
 	Reason  string `json:"reason,omitempty"`
+
+	// Auth is how the last heartbeat authenticated: AuthNodeSecret or
+	// AuthSharedToken (deprecated).
+	Auth string `json:"auth,omitempty"`
 }
+
+// Values of Node.Auth.
+const (
+	AuthNodeSecret  = "node_secret"
+	AuthSharedToken = "shared_token"
+)
 
 // EffectiveWeight is the weight used for DNS answers.
 func (n *Node) EffectiveWeight() int {
@@ -164,4 +174,63 @@ type DNSRecordSet struct {
 type NodePatch struct {
 	Drain          *bool `json:"drain,omitempty"`
 	WeightOverride *int  `json:"weight_override,omitempty"`
+}
+
+// EnrollTokenRequest is the admin body for POST /v1/enroll-tokens.
+type EnrollTokenRequest struct {
+	// NodeID binds the token to one node ID. Empty lets the agent choose
+	// its ID (configured id, else hostname), except an ID that already holds
+	// an active node secret.
+	NodeID string `json:"node_id,omitempty"`
+	// Pools and Region, when set, are enforced on the node's heartbeats
+	// instead of what the agent reports.
+	Pools  []string `json:"pools,omitempty"`
+	Region string   `json:"region,omitempty"`
+	// ExpiresIn is the validity in seconds (default 86400, at most 30 days).
+	ExpiresIn int64  `json:"expires_in,omitempty"`
+	Comment   string `json:"comment,omitempty"`
+}
+
+// EnrollToken describes a one-time enrollment token. Token is only set in
+// the answer that creates it; the controller keeps a hash only.
+type EnrollToken struct {
+	ID        string     `json:"id"`
+	Token     string     `json:"token,omitempty"`
+	NodeID    string     `json:"node_id,omitempty"`
+	Pools     []string   `json:"pools,omitempty"`
+	Region    string     `json:"region,omitempty"`
+	Comment   string     `json:"comment,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+	UsedBy    string     `json:"used_by,omitempty"`
+	// Status is "active", "used" or "expired".
+	Status string `json:"status"`
+}
+
+// EnrollRequest is the agent body for POST /v1/enroll, authenticated with
+// the enrollment token.
+type EnrollRequest struct {
+	// ID is the node ID configured on the agent (empty when not set).
+	ID string `json:"id,omitempty"`
+	// Hostname becomes the node ID when neither the token nor ID sets one.
+	Hostname string `json:"hostname,omitempty"`
+}
+
+// EnrollResponse carries the node secret. It is returned once; the agent
+// stores it and authenticates every later call with it.
+type EnrollResponse struct {
+	NodeID string   `json:"node_id"`
+	Secret string   `json:"secret"`
+	Pools  []string `json:"pools,omitempty"`
+	Region string   `json:"region,omitempty"`
+}
+
+// RotateRequest is the optional admin body for POST /v1/nodes/{id}/rotate.
+type RotateRequest struct {
+	ExpiresIn int64  `json:"expires_in,omitempty"`
+	Comment   string `json:"comment,omitempty"`
+	// RevokeCurrent revokes the node's current secret now instead of when
+	// the new token is used.
+	RevokeCurrent bool `json:"revoke_current,omitempty"`
 }

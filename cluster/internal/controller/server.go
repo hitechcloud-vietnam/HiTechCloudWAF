@@ -48,8 +48,12 @@ type Server struct {
 	cfg     *config.Controller
 	store   *Store
 	records *RecordStore
+	creds   *CredStore
 	log     *slog.Logger
 	probe   *http.Client
+
+	warnMu sync.Mutex
+	warned map[string]time.Time // shared-token deprecation warnings
 
 	primary *engine.Client
 
@@ -77,10 +81,26 @@ func New(cfg *config.Controller, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load dns records: %w", err)
 	}
+	credPath := cfg.CredentialsFile
+	if credPath == "" && cfg.StateFile != "" {
+		credPath = filepath.Join(filepath.Dir(cfg.StateFile), "node-credentials.json")
+	}
+	creds, err := NewCredStore(credPath)
+	if err != nil {
+		return nil, fmt.Errorf("load node credentials: %w", err)
+	}
+	switch {
+	case cfg.RequireEnrollment && cfg.NodeToken != "":
+		log.Info("require_enrollment is set: the shared node_token is ignored")
+	case !cfg.RequireEnrollment:
+		log.Warn("the shared node_token is accepted; it is deprecated, enroll nodes with one-time tokens and set require_enrollment: true")
+	}
 	s := &Server{
 		cfg:     cfg,
 		store:   st,
 		records: recs,
+		creds:   creds,
+		warned:  map[string]time.Time{},
 		log:     log,
 		probe: &http.Client{
 			Timeout: cfg.ProbeTimeout.Duration,
@@ -116,13 +136,16 @@ func New(cfg *config.Controller, log *slog.Logger) (*Server, error) {
 // Store exposes the registry (used by tests).
 func (s *Server) Store() *Store { return s.store }
 
+// Creds exposes the enrollment tokens and node secrets (used by tests).
+func (s *Server) Creds() *CredStore { return s.creds }
+
 // Records exposes the static DNS records (used by tests).
 func (s *Server) Records() *RecordStore { return s.records }
 
 // Handler returns the HTTP routes.
 func (s *Server) Handler() http.Handler {
 	admin := func(h http.HandlerFunc) http.Handler { return auth.Require(h, s.cfg.AdminToken) }
-	node := func(h http.HandlerFunc) http.Handler { return auth.Require(h, s.cfg.NodeToken) }
+	node := s.requireNode
 	dns := func(h http.HandlerFunc) http.Handler { return auth.Require(h, s.cfg.DNSToken, s.cfg.AdminToken) }
 
 	mux := http.NewServeMux()
@@ -132,6 +155,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("POST /v1/heartbeat", node(s.heartbeat))
 	mux.Handle("GET /v1/config/snapshot", node(s.snapshot))
+	// Authenticated by the one-time enrollment token itself.
+	mux.HandleFunc("POST /v1/enroll", s.enroll)
+	mux.Handle("GET /v1/enroll-tokens", admin(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.creds.ListTokens()) }))
+	mux.Handle("POST /v1/enroll-tokens", admin(s.createEnrollToken))
+	mux.Handle("DELETE /v1/enroll-tokens/{id}", admin(s.deleteEnrollToken))
+	mux.Handle("POST /v1/nodes/{id}/rotate", admin(s.rotateNode))
 
 	mux.Handle("GET /v1/nodes", admin(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, s.store.List()) }))
 	mux.Handle("GET /v1/nodes/{id}", admin(s.getNode))
@@ -245,6 +274,30 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	authKind := api.AuthSharedToken
+	if c := identity(r).cred; c != nil {
+		// A node secret reports for its own node only, with the pools and
+		// region fixed at enrollment (when the token set them).
+		if hb.ID != c.NodeID {
+			s.log.Warn("heartbeat for another node refused", "node", hb.ID, "secret_of", c.NodeID, "remote", r.RemoteAddr)
+			http.Error(w, "this node secret belongs to node "+c.NodeID+", not "+hb.ID, http.StatusForbidden)
+			return
+		}
+		if len(c.Pools) > 0 {
+			hb.Pools = c.Pools
+		}
+		if c.Region != "" {
+			hb.Region = c.Region
+		}
+		authKind = api.AuthNodeSecret
+	} else {
+		if _, enrolled := s.creds.Get(hb.ID); enrolled {
+			s.log.Warn("shared-token heartbeat for an enrolled node refused", "node", hb.ID, "remote", r.RemoteAddr)
+			http.Error(w, "node "+hb.ID+" is enrolled and must authenticate with its node secret", http.StatusForbidden)
+			return
+		}
+		s.warnSharedToken(hb.ID)
+	}
 	if old, ok := s.store.Get(hb.ID); ok && !s.cfg.AllowAddressChange &&
 		(!sameIP(old.IPv4, hb.IPv4) || (old.IPv6 != hb.IPv6 && !sameIP(old.IPv6, hb.IPv6))) {
 		s.log.Warn("heartbeat with a changed address refused", "node", hb.ID, "ipv4", hb.IPv4, "registered", old.IPv4)
@@ -257,7 +310,7 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		evs = evs[:200]
 	}
 	s.addEvents(hb.ID, evs)
-	n, err := s.store.Heartbeat(hb)
+	n, err := s.store.Heartbeat(hb, authKind)
 	if err != nil {
 		s.log.Error("persist node", "node", hb.ID, "err", err)
 	}
@@ -351,14 +404,25 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, n)
 }
 
+// deleteNode removes the node from the registry and revokes its node secret.
+// An enrolled node can only come back with a new enrollment token.
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Delete(r.PathValue("id")); errors.Is(err, os.ErrNotExist) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
+	id := r.PathValue("id")
+	revoked, err := s.creds.Revoke(id)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	err = s.store.Delete(id)
+	if errors.Is(err, os.ErrNotExist) && !revoked {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.log.Info("node deleted", "node", id, "secret_revoked", revoked)
 	w.WriteHeader(http.StatusNoContent)
 }
 

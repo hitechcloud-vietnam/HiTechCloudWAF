@@ -5,7 +5,8 @@ controller:
   tls_key: /etc/hcw/tls/controller.key
   state_file: /var/lib/hcw/controller-state.json
   admin_token_file: /etc/hcw/secrets/admin.token
-  node_token_file: /etc/hcw/secrets/node.token
+  node_token_file: /etc/hcw/secrets/node.token   # deprecated shared agent token
+  require_enrollment: false                      # true once every node is enrolled
   dns_token_file: /etc/hcw/secrets/dns.token
   probe_insecure: true
   primary:

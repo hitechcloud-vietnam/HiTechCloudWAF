@@ -132,7 +132,7 @@ func TestProbeAndHeartbeatTimeout(t *testing.T) {
 	s.cfg.AllowLoopbackNodes = true // the test upstream listens on loopback
 	h := hb("n1", "127.0.0.1", "hn")
 	h.ProbeURL = "http://" + u.Host + "/"
-	if _, err := s.Store().Heartbeat(h); err != nil {
+	if _, err := s.Store().Heartbeat(h, api.AuthSharedToken); err != nil {
 		t.Fatal(err)
 	}
 	s.ProbeAll(context.Background())
@@ -160,7 +160,7 @@ func TestProbeAndHeartbeatTimeout(t *testing.T) {
 func TestStatePersistsAdminChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
 	st, _ := NewStore(path)
-	if _, err := st.Heartbeat(hb("n1", "203.0.113.1", "hn")); err != nil {
+	if _, err := st.Heartbeat(hb("n1", "203.0.113.1", "hn"), api.AuthSharedToken); err != nil {
 		t.Fatal(err)
 	}
 	w := 7
