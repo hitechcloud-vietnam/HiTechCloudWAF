@@ -113,8 +113,9 @@ func remoteIP(addr string) net.IP {
 	return net.ParseIP(strings.Trim(h, "[]"))
 }
 
-// pick returns the next healthy upstream round-robin; when all are marked
-// down it still tries one rather than failing every request.
+// pick returns the next usable upstream round-robin: not failed by the
+// active health check and not recently erroring. When none qualifies it
+// still tries one rather than failing every request.
 func (s *siteRT) pick() *upstream {
 	n := len(s.upstreams)
 	if n == 0 {
@@ -124,7 +125,13 @@ func (s *siteRT) pick() *upstream {
 	now := time.Now().UnixNano()
 	for i := 0; i < n; i++ {
 		u := s.upstreams[(start+i)%n]
-		if u.downUntil.Load() < now {
+		if !u.unhealthy.Load() && u.downUntil.Load() < now {
+			return u
+		}
+	}
+	for i := 0; i < n; i++ {
+		u := s.upstreams[(start+i)%n]
+		if !u.unhealthy.Load() {
 			return u
 		}
 	}

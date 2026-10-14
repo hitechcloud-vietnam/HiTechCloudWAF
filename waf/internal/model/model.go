@@ -66,6 +66,43 @@ type DynamicProtection struct {
 	Paths []string `json:"paths"`
 }
 
+// HealthCheck actively probes upstreams; unhealthy ones leave the rotation.
+type HealthCheck struct {
+	// Path to request, e.g. /healthz (empty = disabled).
+	Path        string `json:"path"`
+	IntervalSec int    `json:"interval_sec"` // default 10
+	TimeoutSec  int    `json:"timeout_sec"`  // default 3
+	// Unhealthy consecutive failures take an upstream out (default 3);
+	// Healthy consecutive successes bring it back (default 2).
+	Unhealthy int `json:"unhealthy"`
+	Healthy   int `json:"healthy"`
+}
+
+func (h *HealthCheck) normalize() error {
+	if h.Path == "" {
+		return nil
+	}
+	if !strings.HasPrefix(h.Path, "/") {
+		return errors.New("health_check.path must start with /")
+	}
+	if h.IntervalSec == 0 {
+		h.IntervalSec = 10
+	}
+	if h.TimeoutSec == 0 {
+		h.TimeoutSec = 3
+	}
+	if h.Unhealthy == 0 {
+		h.Unhealthy = 3
+	}
+	if h.Healthy == 0 {
+		h.Healthy = 2
+	}
+	if h.IntervalSec < 1 || h.IntervalSec > 3600 || h.TimeoutSec < 1 || h.TimeoutSec > 60 || h.Unhealthy < 1 || h.Unhealthy > 100 || h.Healthy < 1 || h.Healthy > 100 {
+		return errors.New("health_check values out of range")
+	}
+	return nil
+}
+
 // Rule actions.
 const (
 	RuleAllow     = "allow"      // whitelist: skip rate limits, challenges and WAF
@@ -147,6 +184,7 @@ type Site struct {
 	Bot       BotChallenge      `json:"bot_challenge"`
 	Dynamic   DynamicProtection `json:"dynamic_protection"`
 	Rules     []PathRule        `json:"rules"`
+	Health    HealthCheck       `json:"health_check"`
 	Auth      AuthChallenge     `json:"auth"`
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
@@ -303,6 +341,9 @@ func (s *Site) Normalize() error {
 	}
 	if s.Name == "" {
 		s.Name = s.ServerNames[0]
+	}
+	if err := s.Health.normalize(); err != nil {
+		return err
 	}
 	if len(s.Rules) > 200 {
 		return errors.New("at most 200 rules per site")

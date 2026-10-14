@@ -42,6 +42,7 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
 | `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
 | `rules` | Rule theo đường dẫn (xem bên dưới) |
+| `health_check` | `{path, interval_sec, timeout_sec, unhealthy, healthy}`: kiểm tra upstream chủ động |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
 
 ### Rule theo đường dẫn (`rules`)
@@ -190,6 +191,20 @@ Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
   để xác minh tin đến từ WAF.
 - Kiểm tra cấu hình: nút **Gửi thử cảnh báo** trên console, hoặc
   `POST /api/open/alerts/test`.
+
+### Kiểm tra sức khỏe upstream
+
+`"health_check": {"path": "/healthz", "interval_sec": 10, "timeout_sec": 3, "unhealthy": 3, "healthy": 2}`
+
+- Engine gọi `path` trên từng upstream theo chu kỳ, gửi kèm Host của site.
+- Upstream lỗi `unhealthy` lần liên tiếp (lỗi kết nối hoặc mã ≥ 400) bị loại
+  khỏi vòng chia tải. Khi tốt lại `healthy` lần liên tiếp thì được đưa trở lại.
+- Trạng thái được giữ khi cấu hình nạp lại.
+- Nếu mọi upstream đều lỗi, engine vẫn thử gửi tới một upstream thay vì trả
+  lỗi cho mọi request.
+- Xem trạng thái ở danh sách ứng dụng trên console (chấm xanh/đỏ) hoặc qua
+  `GET /api/open/upstreams`.
+- WebSocket và các giao thức nâng cấp (Upgrade) đi qua WAF bình thường.
 
 ### Access log
 

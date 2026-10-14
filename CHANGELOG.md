@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.0 – 2026-10-14
+
+### Engine (`hcw-waf`)
+- **Access log JSON** cho mọi request, xoay vòng theo dung lượng; trường
+  `action` cho biết request được chuyển tiếp, bị chặn, bị challenge…
+- **Audit log** mọi thao tác quản trị và đăng nhập, che thông tin bí mật;
+  xem trên trang **Hệ thống**.
+- **Sao lưu/khôi phục** toàn bộ cấu hình (site, chứng chỉ), kiểm tra hợp lệ
+  trước khi áp dụng.
+- **Health check upstream chủ động**: tự loại và đưa lại upstream theo trạng
+  thái; hiển thị trên console.
+- Kiểm thử WebSocket qua WAF.
+
 ## v0.3.0 – 2026-10-14
 
 ### Engine (`hcw-waf`)

@@ -82,3 +82,5 @@ td.nowrap { white-space: nowrap; word-break: normal; }
 .small-link { display: inline-block; margin-top: 6px; font-size: 13px; }
 body.viewer .admin-only { display: none !important; }
 .qr { width: 200px; height: 200px; image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 8px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }

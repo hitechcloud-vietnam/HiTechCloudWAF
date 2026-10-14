@@ -50,6 +50,14 @@ type upstream struct {
 	url       *url.URL
 	proxy     *httputil.ReverseProxy
 	downUntil atomic.Int64
+
+	// active health check state
+	unhealthy atomic.Bool
+	hcMu      sync.Mutex
+	fails     int
+	oks       int
+	lastCheck time.Time
+	lastError string
 }
 
 type ruleRT struct {
@@ -169,6 +177,7 @@ func New(ctx context.Context, opt Options) *Engine {
 	}
 	e := &Engine{opt: opt, pool: NewWAFPool(opt.ExtraRules), limiter: newLimiter(), listeners: map[int]*listener{}, ctx: ctx}
 	e.rt.Store(&runtime{ports: map[int]*portRT{}})
+	go e.healthLoop(ctx)
 	go func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
@@ -273,6 +282,7 @@ func (e *Engine) Apply(sites []model.Site, certs []model.Cert) error {
 	for _, pr := range rt.ports {
 		sort.Slice(pr.wild, func(i, j int) bool { return len(pr.wild[i].suffix) > len(pr.wild[j].suffix) })
 	}
+	carryHealth(e.rt.Load(), rt)
 	old := e.rt.Swap(rt)
 	e.pool.Retain(sites, e.opt.BodyLimit)
 	// Old transports are unreachable now; release their idle connections.

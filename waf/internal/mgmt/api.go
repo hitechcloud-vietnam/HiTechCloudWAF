@@ -44,6 +44,8 @@ type API struct {
 	Console http.Handler
 	// Allow restricts the API and console to these networks (empty = any).
 	Allow []*net.IPNet
+	// Upstreams reports upstream health (optional).
+	Upstreams func() any
 	// Audit records administrative actions (optional).
 	Audit *audit.Log
 	// Users enables console accounts; nil means API token only.
@@ -171,6 +173,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
 	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
 	mux.HandleFunc("GET /api/open/metrics", a.metrics)
+	mux.HandleFunc("GET /api/open/upstreams", func(w http.ResponseWriter, _ *http.Request) {
+		if a.Upstreams == nil {
+			ok(w, map[string]any{})
+			return
+		}
+		ok(w, a.Upstreams())
+	})
 	mux.HandleFunc("GET /api/open/audit", func(w http.ResponseWriter, r *http.Request) {
 		if !adminOnly(w, r) {
 			return

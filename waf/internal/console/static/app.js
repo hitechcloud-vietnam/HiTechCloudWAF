@@ -193,7 +193,8 @@
 
   // ---------- sites ----------
   function sites(v, args) {
-    loadAll().then(function () {
+    Promise.all([loadAll(), api("GET", "/api/open/upstreams").catch(function () { return {}; })]).then(function (r) {
+      var health = r[1] || {};
       if (args[0] === "new") return siteForm(v, null);
       if (args[0]) {
         var s = state.sites.filter(function (x) { return String(x.id) === args[0]; })[0];
@@ -215,7 +216,9 @@
         tb.appendChild(el("tr", { class: "click", onclick: function () { location.hash = "#/sites/" + s.id; } }, [
           el("td", {}, [el("b", { text: s.name }), el("div", { class: "muted mono", text: s.server_names.join(", ") })]),
           el("td", { class: "mono", text: s.ports.join(", ") }),
-          el("td", { class: "mono", text: s.upstreams.join("\n") }),
+          el("td", {}, (health[s.id] || s.upstreams.map(function (u) { return { url: u, healthy: true }; })).map(function (u) {
+            return el("div", { class: "mono", title: u.last_error || "" }, [el("span", { class: u.healthy ? "dot ok" : "dot bad" }), u.url]);
+          })),
           el("td", {}, [modePill(s.mode)]),
           el("td", { text: "PL" + s.paranoia }),
           el("td", { text: feats.join(", ") || "–" })]));
@@ -277,6 +280,11 @@
           check("Mã hoá file JavaScript", "f-djs", (s.dynamic_protection || {}).js),
           el("div", { class: "hint", text: "Nội dung thay đổi mỗi request; bot không chạy JS chỉ thấy dữ liệu vô nghĩa. Trang có CSP riêng, ES module và file > 4 MB được giữ nguyên. Ảnh hưởng SEO: chỉ bật cho khu vực cần bảo vệ." })]),
         field("Chỉ áp dụng cho đường dẫn", el("textarea", { id: "f-dpaths", value: ((s.dynamic_protection || {}).paths || []).join("\n") }), "Để trống = toàn site. Ví dụ /san-pham/")])]),
+      el("fieldset", {}, [el("legend", { text: "Kiểm tra sức khỏe upstream" }), el("div", { class: "grid2" }, [
+        field("Đường dẫn kiểm tra", el("input", { id: "f-hcp", value: (s.health_check || {}).path || "", placeholder: "/healthz" }), "Để trống = tắt. Upstream trả lỗi/≥400 nhiều lần liên tiếp sẽ bị loại khỏi vòng chia tải."),
+        field("Chu kỳ (giây)", el("input", { id: "f-hci", type: "number", min: "1", value: (s.health_check || {}).interval_sec || 10 })),
+        field("Số lần lỗi để loại", el("input", { id: "f-hcu", type: "number", min: "1", value: (s.health_check || {}).unhealthy || 3 })),
+        field("Số lần tốt để đưa lại", el("input", { id: "f-hch", type: "number", min: "1", value: (s.health_check || {}).healthy || 2 }))])]),
       el("fieldset", {}, [el("legend", { text: "Proxy nâng cao" }), el("div", { class: "grid2" }, [
         field("Host gửi lên upstream", el("input", { id: "f-uh", value: s.upstream_host || "" }), "Để trống = giữ Host của khách."),
         el("div", {}, [check("Chuyển hướng HTTP → HTTPS", "f-redir", s.redirect_https), check("Bỏ qua kiểm tra chứng chỉ upstream", "f-uins", s.upstream_insecure)])])]),
@@ -301,6 +309,7 @@
         upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
         dynamic_protection: { html: $("f-dhtml").checked, js: $("f-djs").checked, paths: lines(g("f-dpaths")) },
         rules: collectRules(),
+        health_check: g("f-hcp").trim() ? { path: g("f-hcp").trim(), interval_sec: num(g("f-hci"), 10), unhealthy: num(g("f-hcu"), 3), healthy: num(g("f-hch"), 2) } : { path: "" },
         auto_tls: $("f-auto").checked, hsts: $("f-hsts").checked, custom_rules: g("f-rules")
       };
       if (g("f-authp")) body.auth.password = g("f-authp");
