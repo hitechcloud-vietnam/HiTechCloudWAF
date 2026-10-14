@@ -28,12 +28,14 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - TLS nhiều chứng chỉ theo SNI, redirect HTTPS.
 - Reverse proxy nhiều upstream có failover.
 - Anti-bot challenge (JS proof-of-work) và auth challenge (mật khẩu, chống brute force).
+- Bảo vệ HTML/JS động: nội dung được mã hoá khác nhau mỗi lần tải, chống thu
+  thập dữ liệu (scraping).
+- HTTPS tự động Let's Encrypt, HTTP/2, HSTS; rule SecLang tuỳ chỉnh; metrics
+  Prometheus.
 - Trang chặn whitelabel kèm Event ID.
 - Console web quản trị whitelabel: dashboard, ứng dụng, sự kiện (chặn IP hoặc
   báo chặn nhầm chỉ với 1 click), chứng chỉ.
 - Log sự kiện tấn công và API quản trị.
-
-Lộ trình (chưa có): mã hóa HTML/JS động.
 
 ![Console](docs/images/console-dashboard.png)
 

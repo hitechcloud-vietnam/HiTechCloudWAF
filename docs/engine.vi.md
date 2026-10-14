@@ -16,7 +16,8 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
-          └─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
+          ├─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
+          └─ Bảo vệ động: mã hoá HTML/JS trong response (tuỳ chọn)
 ```
 
 Trang chặn mang thương hiệu HiTechCloud và hiển thị **Event ID** để tra cứu.
@@ -38,6 +39,7 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
+| `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
 | `custom_rules` | Rule SecLang riêng của site (ID 1–99999, không được `Include` hay đọc file) |
 
 ### Anti-bot challenge (`bot_challenge`)
@@ -73,6 +75,42 @@ phần header, không quét nội dung. Với body JSON/form, engine kiểm tra
 
 Gợi ý: bật `monitor` vài ngày để xem log, thêm `disabled_rules` cho các rule
 chặn nhầm, rồi mới chuyển sang `block`.
+
+### Bảo vệ HTML/JS động (`dynamic_protection`)
+
+`{"html": true, "js": true, "paths": ["/san-pham/"]}`
+
+**HTML:** mỗi trang trả về được thay bằng một trang nạp nhỏ chứa nội dung gốc
+đã mã hoá bằng khoá ngẫu nhiên riêng cho từng response. Tên biến cũng thay đổi
+mỗi lần. Trình duyệt giải mã rồi dựng lại toàn bộ tài liệu, gồm `<head>`, CSS,
+script ngoài và script inline. Tool thu thập dữ liệu (curl, Scrapy,
+BeautifulSoup…) chỉ nhận được một khối dữ liệu vô nghĩa, và mỗi lần tải lại
+khác nhau.
+
+**JavaScript:** file JS được bọc mã hoá. Khi chạy, mã gốc được đưa vào một thẻ
+`<script>` mới, nên vẫn chạy đúng như cũ: biến toàn cục, `let`/`const`/`class`
+ở cấp cao nhất và `"use strict"` đều giữ nguyên.
+
+**Không áp dụng (giữ nguyên response)** khi gặp:
+
+- response có CSP riêng (vì CSP sẽ chặn trang nạp);
+- ES module (`import`/`export`);
+- charset khác UTF-8, nén bằng brotli, body lớn hơn 4 MB;
+- request khác GET, hoặc status khác 200.
+
+Nội dung gzip từ upstream được tự giải nén. Response đã mã hoá gắn
+`Cache-Control: no-store` và header `X-HCW-Protected`.
+
+**Lưu ý:**
+
+- Đây là **làm rối** (obfuscation), không phải mã hoá bảo mật: khoá đi kèm
+  trang. Mục đích là tăng chi phí cho kẻ thu thập dữ liệu và phân tích mã,
+  tương tự tính năng của SafeLine.
+- Công cụ tìm kiếm có chạy JS (Googlebot) vẫn đọc được, nhưng nên giới hạn bằng
+  `paths` cho khu vực cần bảo vệ (giá, nội dung độc quyền) để không ảnh hưởng
+  SEO.
+- Đã kiểm thử trên Chromium thật: tiêu đề, CSS, script ngoài/inline và tiếng
+  Việt đều đúng, không có lỗi console.
 
 ### HTTPS tự động (Let's Encrypt)
 

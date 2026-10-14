@@ -57,6 +57,15 @@ type AuthChallenge struct {
 	ExcludePaths []string `json:"exclude_paths"`
 }
 
+// DynamicProtection re-encodes HTML pages and JavaScript files on every
+// response so that scrapers without a JavaScript engine get nothing useful.
+type DynamicProtection struct {
+	HTML bool `json:"html"`
+	JS   bool `json:"js"`
+	// Paths limits protection to these path prefixes (empty = whole site).
+	Paths []string `json:"paths"`
+}
+
 // Site is one protected application.
 type Site struct {
 	ID          int      `json:"id"`
@@ -74,9 +83,10 @@ type Site struct {
 	// DisabledRules are CRS rule IDs removed for this site (false positives).
 	DisabledRules []int `json:"disabled_rules"`
 
-	RateLimit RateLimit     `json:"rate_limit"`
-	Bot       BotChallenge  `json:"bot_challenge"`
-	Auth      AuthChallenge `json:"auth"`
+	RateLimit RateLimit         `json:"rate_limit"`
+	Bot       BotChallenge      `json:"bot_challenge"`
+	Dynamic   DynamicProtection `json:"dynamic_protection"`
+	Auth      AuthChallenge     `json:"auth"`
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
 	IPDeny  []string `json:"ip_deny"`
@@ -232,6 +242,9 @@ func (s *Site) Normalize() error {
 	}
 	if s.Name == "" {
 		s.Name = s.ServerNames[0]
+	}
+	if err := checkPaths(s.Dynamic.Paths); err != nil {
+		return err
 	}
 	if err := s.Bot.normalize(); err != nil {
 		return err

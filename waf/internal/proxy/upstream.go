@@ -78,10 +78,18 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 			}
 			pr.Out.Header.Set("X-Forwarded-Proto", proto)
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+			if dyn := s.site.Dynamic; (dyn.HTML || dyn.JS) && pathMatches(pr.In.URL.Path, dyn.Paths) {
+				// Let the transport negotiate and transparently decompress
+				// gzip so the body can be rewritten.
+				pr.Out.Header.Del("Accept-Encoding")
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if v, _ := resp.Request.Context().Value(ctxKey{}).(ctxVal); v.tls && s.site.HSTS {
 				resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
+			if dyn := s.site.Dynamic; dyn.HTML || dyn.JS {
+				return applyDynamic(dyn, resp)
 			}
 			return nil
 		},

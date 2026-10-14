@@ -176,6 +176,7 @@
         if ((s.ip_allow || []).length) feats.push("allowlist");
         if ((s.ip_deny || []).length) feats.push("deny " + s.ip_deny.length);
         if ((s.country_allow || []).length || (s.country_deny || []).length) feats.push("geo");
+        if (s.dynamic_protection && (s.dynamic_protection.html || s.dynamic_protection.js)) feats.push("bảo vệ động");
         tb.appendChild(el("tr", { class: "click", onclick: function () { location.hash = "#/sites/" + s.id; } }, [
           el("td", {}, [el("b", { text: s.name }), el("div", { class: "muted mono", text: s.server_names.join(", ") })]),
           el("td", { class: "mono", text: s.ports.join(", ") }),
@@ -235,6 +236,11 @@
           field(au.password_hash ? "Mật khẩu mới (để trống = giữ nguyên)" : "Mật khẩu", el("input", { id: "f-authp", type: "password", autocomplete: "new-password" }), "8–72 ký tự, lưu dạng bcrypt."),
           field("Hiệu lực (giây)", el("input", { id: "f-autht", type: "number", value: au.ttl_sec || 28800 })),
           field("Bỏ qua đường dẫn", el("textarea", { id: "f-authx", value: (au.exclude_paths || []).join("\n") }))])])]),
+      el("fieldset", {}, [el("legend", { text: "Bảo vệ động (chống thu thập dữ liệu)" }), el("div", { class: "grid2" }, [
+        el("div", {}, [check("Mã hoá HTML mỗi lần tải trang", "f-dhtml", (s.dynamic_protection || {}).html),
+          check("Mã hoá file JavaScript", "f-djs", (s.dynamic_protection || {}).js),
+          el("div", { class: "hint", text: "Nội dung thay đổi mỗi request; bot không chạy JS chỉ thấy dữ liệu vô nghĩa. Trang có CSP riêng, ES module và file > 4 MB được giữ nguyên. Ảnh hưởng SEO: chỉ bật cho khu vực cần bảo vệ." })]),
+        field("Chỉ áp dụng cho đường dẫn", el("textarea", { id: "f-dpaths", value: ((s.dynamic_protection || {}).paths || []).join("\n") }), "Để trống = toàn site. Ví dụ /san-pham/")])]),
       el("fieldset", {}, [el("legend", { text: "Proxy nâng cao" }), el("div", { class: "grid2" }, [
         field("Host gửi lên upstream", el("input", { id: "f-uh", value: s.upstream_host || "" }), "Để trống = giữ Host của khách."),
         el("div", {}, [check("Chuyển hướng HTTP → HTTPS", "f-redir", s.redirect_https), check("Bỏ qua kiểm tra chứng chỉ upstream", "f-uins", s.upstream_insecure)])])]),
@@ -257,6 +263,7 @@
         bot_challenge: { enabled: $("f-bot").checked, difficulty: num(g("f-botd"), 16), ttl_sec: num(g("f-bott"), 3600), exclude_paths: lines(g("f-botx")) },
         auth: { enabled: $("f-auth").checked, password_hash: au.password_hash || "", ttl_sec: num(g("f-autht"), 28800), exclude_paths: lines(g("f-authx")) },
         upstream_host: g("f-uh").trim(), redirect_https: $("f-redir").checked, upstream_insecure: $("f-uins").checked,
+        dynamic_protection: { html: $("f-dhtml").checked, js: $("f-djs").checked, paths: lines(g("f-dpaths")) },
         auto_tls: $("f-auto").checked, hsts: $("f-hsts").checked, custom_rules: g("f-rules")
       };
       if (g("f-authp")) body.auth.password = g("f-authp");
