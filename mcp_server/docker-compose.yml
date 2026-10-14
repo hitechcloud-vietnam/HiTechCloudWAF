@@ -1,0 +1,42 @@
+services:
+  mcp_server:
+    build: .
+    image: safeline-mcp:local
+    container_name: safeline-mcp
+    restart: unless-stopped
+    ports:
+      - "${MCP_PUBLISH_ADDRESS:-127.0.0.1}:${LISTEN_PORT:-5678}:${LISTEN_PORT:-5678}"
+    environment:
+      LISTEN_ADDRESS: "0.0.0.0"
+      LISTEN_PORT: "${LISTEN_PORT:-5678}"
+      # Required because LISTEN_ADDRESS is not loopback.
+      MCP_TLS_CERT: "${MCP_TLS_CERT:-}"
+      MCP_TLS_KEY: "${MCP_TLS_KEY:-}"
+      # Authentication is enabled by default. Only set MCP_AUTH_DISABLED=true
+      # for a loopback-only deployment; a non-loopback listener without a token
+      # is refused at startup.
+      MCP_AUTH_DISABLED: "${MCP_AUTH_DISABLED:-}"
+      MCP_AUTH_STATE_FILE: "/var/lib/safeline-mcp/auth.json"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - type: bind
+        source: ${SAFELINE_MCP_CONFIG_FILE:-./config.yaml}
+        target: /etc/safeline-mcp/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SAFELINE_MCP_SECRETS_DIR:-./secrets}
+        target: /run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SAFELINE_MCP_STATE_DIR:-./state}
+        target: /var/lib/safeline-mcp
+        bind:
+          create_host_path: false

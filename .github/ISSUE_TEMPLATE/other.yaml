@@ -1,0 +1,12 @@
+name: Other
+description: Other issues such as Doc
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search the [open issues](https://github.com/chaitin/SafeLine/issues) and [discussion](https://github.com/chaitin/SafeLine/discussions) for duplicate issue first. 
+        Please rise only one suggestion in an issue.
+  - type: textarea
+    id: content
+    attributes:
+      label: Content

@@ -1,0 +1,28 @@
+name: Suggestion
+description: New feature or improvements.
+title: "[Suggestion] "
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search the [open issues](https://github.com/chaitin/SafeLine/issues) and [discussion](https://github.com/chaitin/SafeLine/discussions) for duplicate issue first.
+        Please submit only one suggestion in an issue.
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to be added or improved?
+      description: Please describe the feature or improvement you would like to see.
+      placeholder: Describe the desired feature or improvement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Why is it needed?
+      description: Please explain the background and the problem this suggestion would solve.
+      placeholder: Describe the background and the problem that frustrates you.
+    validations:
+      required: true
