@@ -24,6 +24,8 @@ controller:
   primary:
     base_url: https://127.0.0.1:9443
     token_file: /etc/hcw/secrets/primary-engine.token   # API token from the console
+    # token_header defaults to X-HCW-API-TOKEN (hcw-waf); set
+    # X-SLCE-API-TOKEN for the legacy engine images.
     insecure_skip_verify: true                           # loopback only
     # IMPORTANT: verify the paths/fields below against the API docs of the
     # engine version you run before enabling prune.

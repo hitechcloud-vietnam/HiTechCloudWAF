@@ -85,7 +85,7 @@ type Resource struct {
 
 func (e *Engine) applyDefaults() error {
 	if e.TokenHeader == "" {
-		e.TokenHeader = "X-SLCE-API-TOKEN"
+		e.TokenHeader = "X-HCW-API-TOKEN"
 	}
 	if e.HealthPath == "" {
 		e.HealthPath = "/api/open/health"

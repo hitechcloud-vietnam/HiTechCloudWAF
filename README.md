@@ -30,7 +30,11 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - Cảnh báo tấn công qua Telegram và webhook (có chữ ký HMAC).
 - ACL IP allow/deny (CIDR), chặn/cho phép theo quốc gia (GeoIP).
 - TLS nhiều chứng chỉ theo SNI, redirect HTTPS.
-- Reverse proxy nhiều upstream có failover.
+- Reverse proxy nhiều upstream: round-robin, trọng số, least_conn, ip_hash,
+  sticky session, health check chủ động, sửa header request/response.
+- Cache response trong RAM và nén gzip.
+- Threat intelligence: tự tải danh sách IP xấu (FireHOL, Spamhaus…); bot tìm
+  kiếm thật (Googlebot, Bingbot) được xác minh bằng reverse DNS.
 - Anti-bot challenge (JS proof-of-work) và auth challenge (mật khẩu, chống brute force).
 - Bảo vệ HTML/JS động: nội dung được mã hoá khác nhau mỗi lần tải, chống thu
   thập dữ liệu (scraping).
@@ -39,7 +43,8 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - Trang chặn whitelabel kèm Event ID.
 - Console web quản trị whitelabel: dashboard, ứng dụng, sự kiện (chặn IP hoặc
   báo chặn nhầm chỉ với 1 click), chứng chỉ; nhiều tài khoản với vai trò
-  admin/viewer và xác thực 2 lớp (TOTP).
+  admin/viewer và xác thực 2 lớp (TOTP); giao diện tiếng Việt và tiếng Anh.
+- Access log JSON, audit log, sao lưu/khôi phục cấu hình; CLI `hcwctl`.
 - Log sự kiện tấn công và API quản trị (đặc tả OpenAPI: [docs/api/](docs/api/README.md)).
 
 ![Console](docs/images/console-dashboard.png)
@@ -52,7 +57,8 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - Đồng bộ cấu hình (site, chứng chỉ…) từ node primary sang toàn bộ cluster, tự
   dịch ID tham chiếu chéo.
 - DNS authoritative: chỉ trả IP node khỏe, weighted, ưu tiên region theo EDNS
-  Client Subnet, failover tự động.
+  Client Subnet hoặc theo quốc gia (GeoDNS), failover tự động; bản ghi tĩnh
+  A/AAAA/CNAME/TXT/MX/NS/SRV/CAA quản lý qua API và dashboard.
 - Dashboard whitelabel (tên, màu, logo), thống kê và sự kiện tấn công tập trung
   từ mọi node.
 
@@ -69,6 +75,9 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 | `compose.yaml`, `scripts/manage.py` | Stack engine upstream (image Chaitin, cần thỏa thuận OEM) |
 | `cluster/` | Controller, agent và DNS cho cluster (Go) — xem [docs/cluster.vi.md](docs/cluster.vi.md) |
 | `branding/console/` | Overlay whitelabel cho image console |
+| `ctl/` | `hcwctl` – CLI quản trị, xem [ctl/README.md](ctl/README.md) |
+| `deploy/` | Helm chart và manifest Kubernetes, xem [docs/kubernetes.vi.md](docs/kubernetes.vi.md) |
+| `bench/` | Benchmark hiệu năng, xem [bench/RESULTS.md](bench/RESULTS.md) |
 | `mcp_server/` | HiTechCloud WAF MCP Server |
 | `management/` | Mã nguồn management/tcontrollerd (legacy) |
 | `sdk/` | Plugin tích hợp gateway |

@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.5.0 – 2026-10-14
+
+### Bảo mật (từ đợt rà soát code)
+- Chặn vượt WAF bằng đường dẫn không chuẩn (`/static/../login`, `//admin`,
+  `%2e%2e`, `\`): trả 400 trước khi xét rule.
+- `X-Forwarded-For` nhiều dòng không còn giả mạo được IP khách.
+- Tài khoản `viewer` không còn đọc được private key, hash mật khẩu site và
+  danh sách người dùng.
+- `custom_rules` chỉ nhận directive rule; cấm operator đọc file/mạng.
+- Sửa open redirect sau trang mật khẩu; rate limit IPv6 theo /64, giới hạn
+  bộ nhớ; redirect HTTPS chỉ tới tên miền của site; token Telegram không lộ
+  trong log.
+- Đổi mật khẩu kết thúc các phiên khác; giới hạn đăng nhập theo tài khoản;
+  giới hạn số phép bcrypt chạy đồng thời.
+- Cluster: chống SSRF qua probe, node không đổi được địa chỉ đã đăng ký,
+  agent chỉ đồng bộ collection cấu hình, DNS server bắt buộc https.
+- `install.sh` kiểm tra SHA256 của binary, nhận token từ file.
+
+### Engine (`hcw-waf`)
+- **Cache response** trong RAM theo site (đuôi file tĩnh hoặc theo đường
+  dẫn), `X-HCW-Cache`, xoá cache qua API/console; **nén gzip**.
+- **Cân bằng tải**: round_robin, weighted (`weight=N`), least_conn,
+  ip_hash, random; **sticky session**; sửa header request/response, ẩn
+  `Server`/`X-Powered-By`.
+- **Threat intelligence**: tự tải danh sách IP xấu (FireHOL, Spamhaus
+  DROP…), chế độ block/challenge/monitor theo site, dùng được khi offline.
+- **Bot tìm kiếm đã xác minh** (Googlebot, Bingbot…) qua reverse DNS được
+  miễn anti-bot challenge.
+- **Console song ngữ** Việt/Anh.
+- Nâng Go lên 1.26, `golang.org/x/crypto` v0.58.0.
+
+### Cluster (`hcw`)
+- **GeoDNS** theo quốc gia/châu lục (mmdb), quy tắc theo pool hoặc bản ghi.
+- **Bản ghi DNS tĩnh** A, AAAA, CNAME, TXT, MX, NS, SRV, CAA, wildcard,
+  delegation; quản lý qua API `/v1/dns/records` và dashboard.
+- Header token mặc định tới engine là `X-HCW-API-TOKEN` (engine image cũ cần
+  đặt `token_header: X-SLCE-API-TOKEN`).
+
+### Công cụ & triển khai
+- **`hcwctl`**: CLI quản trị (site, chứng chỉ, sự kiện, backup/restore,
+  người dùng…), bản Linux/macOS/Windows trong release.
+- **Helm chart** và manifest Kubernetes (`deploy/`), kiểm tra trong CI.
+- **Đặc tả OpenAPI 3.1** cho API engine và controller, test chống lệch.
+- Tài liệu tiếng Anh (`README.en.md`, `docs/en/`).
+- Bộ benchmark `bench/` và báo cáo hiệu năng.
+- Nâng GitHub Actions (checkout, setup-go, docker/*), `miekg/dns`,
+  `mcp-go`, `zap`.
+
 ## v0.4.0 – 2026-10-14
 
 ### Engine (`hcw-waf`)
