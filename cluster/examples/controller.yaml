@@ -7,8 +7,15 @@ controller:
 
   # Generate each with: hcw token > /etc/hcw/secrets/<name>.token
   admin_token_file: /etc/hcw/secrets/admin.token   # dashboard + admin API
-  node_token_file: /etc/hcw/secrets/node.token     # agents (heartbeat, config)
+  node_token_file: /etc/hcw/secrets/node.token     # shared agent token (deprecated)
   dns_token_file: /etc/hcw/secrets/dns.token       # DNS servers (read pools + records)
+  # Agents enroll with one-time tokens and get their own node secret. Set to
+  # true once every node is enrolled: the shared node token is then refused
+  # (node_token may be removed).
+  require_enrollment: false
+  # Enrollment tokens and node secrets (SHA-256 hashes only). Defaults to
+  # node-credentials.json next to state_file.
+  credentials_file: /var/lib/hcw/node-credentials.json
   # Static DNS records managed on the dashboard / via /v1/dns/records.
   # Defaults to dns-records.json next to state_file.
   dns_records_file: /var/lib/hcw/dns-records.json
