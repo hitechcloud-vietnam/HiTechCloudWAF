@@ -1,3 +1,5 @@
+English: [en/install.md](en/install.md)
+
 # Cài đặt HiTechCloud WAF
 
 Có hai cách cài: dùng **binary + systemd** (khuyên dùng, không cần Docker)

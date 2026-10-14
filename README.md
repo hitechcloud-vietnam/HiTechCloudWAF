@@ -1,3 +1,5 @@
+English: [README.en.md](README.en.md)
+
 <p align="center">
   <img src="/images/logo.svg" width="360" alt="HiTechCloud WAF" />
 </p>
@@ -38,7 +40,7 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 - Console web quản trị whitelabel: dashboard, ứng dụng, sự kiện (chặn IP hoặc
   báo chặn nhầm chỉ với 1 click), chứng chỉ; nhiều tài khoản với vai trò
   admin/viewer và xác thực 2 lớp (TOTP).
-- Log sự kiện tấn công và API quản trị.
+- Log sự kiện tấn công và API quản trị (đặc tả OpenAPI: [docs/api/](docs/api/README.md)).
 
 ![Console](docs/images/console-dashboard.png)
 
@@ -70,6 +72,8 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 | `mcp_server/` | HiTechCloud WAF MCP Server |
 | `management/` | Mã nguồn management/tcontrollerd (legacy) |
 | `sdk/` | Plugin tích hợp gateway |
+| `docs/api/` | Đặc tả OpenAPI 3.1 của API engine và controller — xem [docs/api/README.md](docs/api/README.md) |
+| `docs/en/` | Tài liệu tiếng Anh |
 
 ## Bắt đầu
 
