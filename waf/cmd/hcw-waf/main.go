@@ -123,7 +123,7 @@ func run(path string, log *slog.Logger) error {
 	eng := proxy.New(ctx, proxy.Options{
 		Access: access,
 		GeoIP:  geoIface,
-		Bind:   cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
+		Bind:   cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets, CacheMB: cfg.CacheMB,
 		Brand: cfg.Brand, ExtraRules: cfg.ExtraRules, Secret: secret, Log: log, Events: evlog,
 	})
 	if cfg.ACME.Enabled {

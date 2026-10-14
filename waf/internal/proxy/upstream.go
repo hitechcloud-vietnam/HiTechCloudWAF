@@ -16,7 +16,11 @@ type ctxKey struct{}
 type ctxVal struct {
 	ip  net.IP
 	tls bool
+	// fill is set when the response should be stored in the cache.
+	fill *cacheFillReq
 }
+
+const hstsValue = "max-age=31536000; includeSubDomains"
 
 type readCloser struct {
 	io.Reader
@@ -78,18 +82,27 @@ func (e *Engine) newUpstream(s *siteRT, u *url.URL) *upstream {
 			}
 			pr.Out.Header.Set("X-Forwarded-Proto", proto)
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
-			if dyn := s.site.Dynamic; (dyn.HTML || dyn.JS) && pathMatches(pr.In.URL.Path, dyn.Paths) {
+			if dyn := s.site.Dynamic; v.fill != nil || ((dyn.HTML || dyn.JS) && pathMatches(pr.In.URL.Path, dyn.Paths)) {
 				// Let the transport negotiate and transparently decompress
-				// gzip so the body can be rewritten.
+				// gzip so the body can be rewritten, or cached in a form
+				// every client can take.
 				pr.Out.Header.Del("Accept-Encoding")
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if v, _ := resp.Request.Context().Value(ctxKey{}).(ctxVal); v.tls && s.site.HSTS {
-				resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			v, _ := resp.Request.Context().Value(ctxKey{}).(ctxVal)
+			if v.tls && s.site.HSTS {
+				resp.Header.Set("Strict-Transport-Security", hstsValue)
 			}
 			if dyn := s.site.Dynamic; dyn.HTML || dyn.JS {
-				return applyDynamic(dyn, resp)
+				if err := applyDynamic(dyn, resp); err != nil {
+					return err
+				}
+			}
+			// After dynamic protection, so its per-response output (marked
+			// X-HCW-Protected) is seen and never stored.
+			if v.fill != nil {
+				e.fillCache(s, v.fill, resp)
 			}
 			return nil
 		},
