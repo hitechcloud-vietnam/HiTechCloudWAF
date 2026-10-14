@@ -17,7 +17,7 @@ jobs:
       matrix:
         module: [waf, cluster, mcp_server]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -39,7 +39,7 @@ jobs:
       matrix:
         module: [waf, cluster, mcp_server]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -62,7 +62,7 @@ jobs:
           - context: cluster
             image: hitechcloud-waf-cluster
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         if: github.event_name == 'push'
