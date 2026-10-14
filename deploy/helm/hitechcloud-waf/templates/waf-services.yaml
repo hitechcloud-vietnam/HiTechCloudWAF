@@ -1,0 +1,88 @@
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $v := .Values -}}
+{{- if $v.waf.ports }}
+# Site traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "hcw.componentLabels" (list . "waf") | nindent 4 }}
+    {{- with $v.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $v.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $v.service.type }}
+  {{- if and (has $v.service.type (list "LoadBalancer" "NodePort")) $v.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ $v.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if eq $v.service.type "LoadBalancer" }}
+  {{- with $v.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with $v.service.loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+  {{- end }}
+  {{- with $v.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- with $v.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ . }}
+  {{- end }}
+  {{- with $v.service.ipFamilies }}
+  ipFamilies:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "hcw.selectorLabels" (list . "waf") | nindent 4 }}
+  ports:
+    {{- range $v.waf.ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .name }}
+      protocol: {{ default "TCP" .protocol }}
+      {{- if and .nodePort (has $v.service.type (list "LoadBalancer" "NodePort")) }}
+      nodePort: {{ .nodePort }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+---
+# Web console and management API of the WAF pods (HTTPS).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-console
+  labels:
+    {{- include "hcw.componentLabels" (list . "waf") | nindent 4 }}
+    app.kubernetes.io/service: console
+    {{- with $v.console.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $v.console.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $v.console.service.type }}
+  {{- if eq $v.console.service.type "LoadBalancer" }}
+  {{- with $v.console.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- include "hcw.selectorLabels" (list . "waf") | nindent 4 }}
+  ports:
+    - name: console
+      port: {{ $v.console.service.port }}
+      targetPort: console
+      protocol: TCP
+      {{- if and $v.console.service.nodePort (has $v.console.service.type (list "LoadBalancer" "NodePort")) }}
+      nodePort: {{ $v.console.service.nodePort }}
+      {{- end }}

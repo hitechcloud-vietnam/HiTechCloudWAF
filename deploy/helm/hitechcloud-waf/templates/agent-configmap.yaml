@@ -1,0 +1,33 @@
+{{- if .Values.agent.enabled }}
+{{- $a := .Values.agent -}}
+{{- $cfg := dict
+  "controller_url" (default (include "hcw.controllerURL" .) $a.controllerURL)
+  "controller_ca" "/etc/hcw/tls/ca.crt"
+  "node_token_file" "/etc/hcw/secrets/node.token"
+  "data_dir" "/var/lib/hcw"
+  "interval" $a.interval
+  "weight" (int $a.weight)
+  "apply_config" $a.applyConfig
+  "engine" (dict
+    "base_url" (printf "https://127.0.0.1:%d" (int .Values.waf.api.port))
+    "token_file" "/etc/hcw/secrets/engine.token"
+    "token_header" "X-HCW-API-TOKEN"
+    "insecure_skip_verify" true)
+-}}
+{{- range $k, $f := dict "id" "id" "name" "name" "region" "region" "ipv4" "ipv4" "ipv6" "ipv6" "probe_url" "probeURL" }}
+{{- with index $a $f }}{{ $_ := set $cfg $k . }}{{ end }}
+{{- end }}
+{{- with $a.pools }}{{ $_ := set $cfg "pools" . }}{{ end }}
+{{- with $a.labels }}{{ $_ := set $cfg "labels" . }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hcw.fullname" . }}-agent
+  labels:
+    {{- include "hcw.componentLabels" (list . "agent") | nindent 4 }}
+data:
+  # Template: __POD_NAME__, __POD_IP__, __HOST_IP__ and __NODE_NAME__ are
+  # replaced by an init container.
+  agent.yaml: |
+    {{- toYaml (dict "agent" $cfg) | nindent 4 }}
+{{- end }}

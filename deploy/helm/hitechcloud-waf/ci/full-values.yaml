@@ -1,0 +1,105 @@
+# Every component enabled: autoscaled WAF pods with agent sidecars, a
+# primary engine, the controller, DNS, console Ingress and ServiceMonitor.
+# Used by CI (helm lint / helm template) and as an example.
+image:
+  tag: "0123456789abcdef0123456789abcdef01234567"
+  pullPolicy: IfNotPresent
+clusterImage:
+  tag: "0123456789abcdef0123456789abcdef01234567"
+  pullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: ghcr-pull
+
+auth:
+  admin:
+    username: noc-admin
+
+waf:
+  persistence:
+    enabled: false          # configuration comes from the primary
+  api:
+    allow: [10.0.0.0/8, 192.168.0.0/16]
+  config:
+    trusted_proxies: [10.0.0.0/8]
+    acme:
+      enabled: true
+      email: noc@example.vn
+    node_name: k8s
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: waf
+
+service:
+  type: NodePort
+  externalTrafficPolicy: Local
+
+console:
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: waf-console.example.vn
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: waf-console-tls
+        hosts: [waf-console.example.vn]
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+
+primary:
+  enabled: true
+
+controller:
+  enabled: true
+  service:
+    type: LoadBalancer
+  tls:
+    extraDNSNames: [ctl.waf.example.vn]
+    extraIPs: [203.0.113.5]
+
+agent:
+  enabled: true
+  region: hn
+  pools: [web]
+  ipv4: 203.0.113.10
+  labels:
+    k8s-node: __NODE_NAME__
+
+dns:
+  enabled: true
+  zones:
+    - name: waf.example.vn
+      ns: [ns1.waf.example.vn, ns2.waf.example.vn]
+      hostmaster: noc.example.vn
+      ttl: 30
+      records:
+        - {name: ns1, type: A, value: 203.0.113.53}
+        - {name: ns2, type: A, value: 198.51.100.53}
+        - name: edge
+          pool: web
+          max_answers: 2
+          fail_open: true
+          prefer_region:
+            - {cidr: 14.160.0.0/11, region: hn}
+        - {name: customer-a, type: CNAME, value: edge.waf.example.vn.}

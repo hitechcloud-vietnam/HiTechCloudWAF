@@ -1,0 +1,45 @@
+{{- if .Values.console.ingress.enabled }}
+{{- $svc := include "hcw.consoleTarget" . -}}
+{{- $port := .Values.console.service.port -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hcw.fullname" . }}-console
+  labels:
+    {{- include "hcw.componentLabels" (list . "console") | nindent 4 }}
+  {{- with .Values.console.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.console.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.console.ingress.tls }}
+  tls:
+    {{- range . }}
+    - hosts:
+        {{- toYaml .hosts | nindent 8 }}
+      {{- with .secretName }}
+      secretName: {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.console.ingress.hosts }}
+    - {{- with .host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ default "Prefix" .pathType }}
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  number: {{ $port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

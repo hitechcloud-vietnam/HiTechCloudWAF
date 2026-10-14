@@ -1,0 +1,51 @@
+{{- with .Values.metrics.serviceMonitor }}
+{{- if .enabled }}
+{{- $fullname := include "hcw.fullname" $ -}}
+# GET /api/open/metrics needs the API token (Bearer) and is served over
+# HTTPS on the console port. The ServiceMonitor lives in the release
+# namespace because Prometheus reads the token Secret from there.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "hcw.componentLabels" (list $ "waf") | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list $ "waf") | nindent 6 }}
+      app.kubernetes.io/service: console
+  endpoints:
+    - port: console
+      path: /api/open/metrics
+      scheme: https
+      interval: {{ .interval }}
+      scrapeTimeout: {{ .scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "hcw.authSecret" $ }}
+          key: api-token
+      tlsConfig:
+        {{- if and (include "hcw.needCA" $) (not $.Values.waf.api.tls.existingSecret) (not $.Values.cluster.ca.existingSecret) }}
+        serverName: {{ $fullname }}-console
+        ca:
+          secret:
+            name: {{ include "hcw.caSecret" $ }}
+            key: tls.crt
+        {{- else }}
+        insecureSkipVerify: {{ .insecureSkipVerify }}
+        {{- end }}
+      {{- with .relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

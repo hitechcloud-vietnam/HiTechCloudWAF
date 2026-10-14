@@ -1,0 +1,87 @@
+{{- $fullname := include "hcw.fullname" . -}}
+{{- $v := .Values -}}
+apiVersion: apps/v1
+kind: {{ $v.waf.kind }}
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "hcw.componentLabels" (list . "waf") | nindent 4 }}
+spec:
+  {{- if eq $v.waf.kind "Deployment" }}
+  {{- if not $v.autoscaling.enabled }}
+  replicas: {{ $v.waf.replicaCount }}
+  {{- end }}
+  strategy:
+    {{- if $v.waf.updateStrategy }}
+    {{- toYaml $v.waf.updateStrategy | nindent 4 }}
+    {{- else if and (include "hcw.waf.usePVC" .) (not (has "ReadWriteMany" $v.waf.persistence.accessModes)) }}
+    # A ReadWriteOnce volume cannot be attached to the old and new pod.
+    type: Recreate
+    {{- else if $v.waf.hostNetwork }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+    {{- end }}
+  {{- else }}
+  updateStrategy:
+    {{- if $v.waf.updateStrategy }}
+    {{- toYaml $v.waf.updateStrategy | nindent 4 }}
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+    {{- end }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "hcw.selectorLabels" (list . "waf") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcw.selectorLabels" (list . "waf") | nindent 8 }}
+        {{- with $v.waf.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "hcw.waf.config" . | sha256sum }}
+        {{- if $v.agent.enabled }}
+        checksum/agent: {{ include (print $.Template.BasePath "/agent-configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with $v.waf.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "hcw.waf.podSpec" (dict "root" . "role" "waf") | nindent 6 }}
+{{- if and (include "hcw.waf.usePVC" .) (not $v.waf.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-data
+  labels:
+    {{- include "hcw.componentLabels" (list . "waf") | nindent 4 }}
+  {{- if or $v.waf.persistence.keep $v.waf.persistence.annotations }}
+  annotations:
+    {{- if $v.waf.persistence.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with $v.waf.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $v.waf.persistence.accessModes | nindent 4 }}
+  {{- with $v.waf.persistence.storageClass }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $v.waf.persistence.size }}
+{{- end }}
