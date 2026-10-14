@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: HiTechCloud WAF Cluster controller API
-  version: 0.4.0
+  version: 0.6.0
   summary: HTTP API of `hcw controller`.
   description: |
     API of the cluster controller (`hcw controller`, default listen `:7443`,
@@ -10,9 +10,18 @@ info:
     `Authorization: Bearer <token>`):
 
     * **admin** (`admin.token`): operators and the dashboard;
-    * **node** (`node.token`): `hcw agent` on every WAF node;
+    * **node**: `hcw agent` on every WAF node, with its own **node secret**
+      (`hcwn_...`) obtained once from `POST /v1/enroll` with a one-time
+      **enrollment token** (`hcwe_...`) created by an admin. A node secret
+      can only report for its own node ID. The shared `node.token` is still
+      accepted (deprecated) unless the controller sets
+      `require_enrollment: true`, and never for a node ID that has enrolled;
     * **dns** (`dns.token`): `hcw dns` servers (the admin token is accepted
       too on the DNS endpoint).
+
+    The controller stores only SHA-256 hashes of enrollment tokens and node
+    secrets (`credentials_file`, default `node-credentials.json` next to
+    `state_file`).
 
     Each operation lists the accepted token in `x-required-token`.
 
@@ -38,6 +47,8 @@ tags:
     description: Pools and DNS endpoints
   - name: events
     description: Cluster-wide security events
+  - name: enrollment
+    description: One-time enrollment tokens and per-node secrets
   - name: sync
     description: Configuration replication from the primary engine
   - name: dns
@@ -103,9 +114,15 @@ paths:
         most 200 events per heartbeat are kept; events are held in memory
         only (the newest 5000 cluster-wide). `probe_url`, when set, must
         point at the node's own `ipv4` or `ipv6` address.
+
+        With a node secret, `id` must be the node the secret was issued to,
+        and the `pools` / `region` fixed by the enrollment token (when it set
+        them) replace the reported ones. The shared node token is refused
+        for a node ID that has enrolled.
       security:
+        - nodeSecret: []
         - nodeToken: []
-      x-required-token: node
+      x-required-token: node secret, or the shared node token (deprecated)
       requestBody:
         required: true
         content:
@@ -131,6 +148,22 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            The node secret belongs to another node ID, or the shared node
+            token was used for an enrolled node.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "409":
+          description: |
+            The node is registered with another address and
+            `allow_address_change` is off; an admin must delete it first.
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /v1/config/snapshot:
     get:
@@ -138,8 +171,9 @@ paths:
       operationId: getSnapshot
       summary: Current configuration snapshot from the primary engine
       security:
+        - nodeSecret: []
         - nodeToken: []
-      x-required-token: node
+      x-required-token: node secret, or the shared node token (deprecated)
       responses:
         "200":
           description: Snapshot and the resource definitions needed to apply it.
@@ -155,6 +189,132 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SnapshotResponse"
+
+  /v1/enroll:
+    post:
+      tags: [enrollment, agent]
+      operationId: enroll
+      summary: Exchange a one-time enrollment token for a node secret
+      description: |
+        Called once by `hcw agent` started with `enroll_token(_file)`. The
+        bearer is the enrollment token (`hcwe_...`), which is consumed. The
+        node ID is the token's `node_id`, else the request `id`, else the
+        lower-cased `hostname`. A token bound to a node ID replaces that
+        node's previous secret (rotation); an unbound token cannot take an ID
+        that already holds an active secret.
+
+        The returned `secret` (`hcwn_...`) is shown once; the agent stores it
+        (mode 0600) in its `data_dir` as `node-credential.json` and sends it
+        as the bearer token from then on.
+      security:
+        - enrollToken: []
+      x-required-token: enrollment token
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+      responses:
+        "200":
+          description: Enrolled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Unknown, expired, revoked or already used enrollment token.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: "unauthorized\n"
+        "403":
+          description: The token is bound to another node ID than the requested `id`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "409":
+          description: Unbound token, and the node ID already holds an active node secret.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/enroll-tokens:
+    get:
+      tags: [enrollment]
+      operationId: listEnrollTokens
+      summary: Enrollment tokens, newest first (without the tokens themselves)
+      description: Used and expired tokens stay listed for 7 days after they expire.
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: Tokens.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EnrollToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [enrollment]
+      operationId: createEnrollToken
+      summary: Create a one-time enrollment token
+      description: The answer is the only place the token appears; the controller keeps its hash.
+      security:
+        - adminToken: []
+      x-required-token: admin
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollTokenRequest"
+            examples:
+              bound:
+                value: {node_id: waf-hn-01, pools: [web], region: hn, expires_in: 3600}
+      responses:
+        "201":
+          description: Created; `token` is set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/enroll-tokens/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [enrollment]
+      operationId: deleteEnrollToken
+      summary: Revoke an enrollment token
+      description: Node secrets already issued with the token stay valid (revoke those with `DELETE /v1/nodes/{id}`).
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /v1/nodes:
     get:
@@ -237,24 +397,69 @@ paths:
     delete:
       tags: [nodes]
       operationId: deleteNode
-      summary: Remove a node from the registry
-      description: A node that keeps sending heartbeats registers again.
+      summary: Remove a node and revoke its node secret
+      description: |
+        Removes the node from the registry and revokes its node secret, if
+        it has one. An enrolled node can only come back with a new
+        enrollment token; a node using the shared token (deprecated)
+        registers again on its next heartbeat.
       security:
         - adminToken: []
       x-required-token: admin
       responses:
         "204":
-          description: Removed.
+          description: Removed and/or secret revoked.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
-          description: The state file could not be written.
+          description: The state or credentials file could not be written.
           content:
             text/plain:
               schema:
                 type: string
+
+  /v1/nodes/{id}/rotate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+    post:
+      tags: [nodes, enrollment]
+      operationId: rotateNodeSecret
+      summary: Issue an enrollment token to replace a node's secret
+      description: |
+        Creates a one-time enrollment token bound to the node (keeping the
+        pools and region of its current secret). Put it in the agent's
+        `enroll_token_file`: the agent notices the new token, enrolls again
+        and the previous secret stops working. The current secret stays valid
+        until then, unless `revoke_current` is true.
+      security:
+        - adminToken: []
+      x-required-token: admin
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateRequest"
+      responses:
+        "201":
+          description: Created; `token` is set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /v1/pools:
     get:
@@ -507,7 +712,17 @@ components:
     nodeToken:
       type: http
       scheme: bearer
-      description: Node token shared by agents (`/etc/hcw/secrets/node.token`).
+      description: |
+        Node token shared by agents (`/etc/hcw/secrets/node.token`).
+        Deprecated; refused when `require_enrollment` is true.
+    nodeSecret:
+      type: http
+      scheme: bearer
+      description: Per-node secret (`hcwn_...`) returned by `POST /v1/enroll`.
+    enrollToken:
+      type: http
+      scheme: bearer
+      description: One-time enrollment token (`hcwe_...`) from `POST /v1/enroll-tokens`.
     dnsToken:
       type: http
       scheme: bearer
@@ -533,7 +748,7 @@ components:
           schema:
             type: string
     NotFound:
-      description: Unknown node.
+      description: Unknown node, record or enrollment token.
       content:
         text/plain:
           schema:
@@ -762,6 +977,10 @@ components:
             reason:
               type: string
               description: Why the node is unhealthy.
+            auth:
+              type: string
+              enum: [node_secret, shared_token]
+              description: How the last heartbeat authenticated (`shared_token` is deprecated).
 
     NodePatch:
       type: object
@@ -771,6 +990,112 @@ components:
         weight_override:
           type: integer
           minimum: 0
+
+    EnrollTokenRequest:
+      type: object
+      properties:
+        node_id:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+          description: |
+            Bind the token to this node ID. Empty lets the agent choose (its
+            configured `id`, else its hostname), except an ID that already
+            holds an active node secret.
+        pools:
+          type: array
+          description: When set, enforced on the node's heartbeats instead of the reported pools.
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+        region:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+          description: When set, enforced on the node's heartbeats instead of the reported region.
+        expires_in:
+          type: integer
+          description: Validity in seconds (0 or omitted = 86400).
+          minimum: 0
+          maximum: 2592000
+        comment:
+          type: string
+          maxLength: 200
+
+    EnrollToken:
+      type: object
+      required: [id, created_at, expires_at, status]
+      properties:
+        id:
+          type: string
+          description: Public part of the token (`hcwe_<id>_...`).
+        token:
+          type: string
+          description: The one-time token. Only present in the answer that creates it.
+        node_id:
+          type: string
+        pools:
+          type: array
+          items:
+            type: string
+        region:
+          type: string
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        used_at:
+          type: string
+          format: date-time
+        used_by:
+          type: string
+          description: Node ID that enrolled with the token.
+        status:
+          type: string
+          enum: [active, used, expired]
+
+    EnrollRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Node ID configured on the agent (omitted when not configured).
+        hostname:
+          type: string
+          description: Used (lower-cased) as node ID when neither the token nor `id` sets one.
+
+    EnrollResponse:
+      type: object
+      required: [node_id, secret]
+      properties:
+        node_id:
+          type: string
+        secret:
+          type: string
+          description: The node secret (`hcwn_...`), returned once.
+        pools:
+          type: array
+          items:
+            type: string
+        region:
+          type: string
+
+    RotateRequest:
+      type: object
+      properties:
+        expires_in:
+          type: integer
+          description: Validity of the new token in seconds (0 or omitted = 86400).
+          minimum: 0
+          maximum: 2592000
+        comment:
+          type: string
+          maxLength: 200
+        revoke_current:
+          type: boolean
+          description: Revoke the current secret now instead of when the new token is used.
 
     Endpoint:
       type: object

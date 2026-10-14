@@ -3,8 +3,10 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -133,8 +135,16 @@ type Controller struct {
 	AdminToken     string `yaml:"admin_token"`
 	AdminTokenFile string `yaml:"admin_token_file"`
 	// NodeToken is shared by agents to register and fetch configuration.
+	// Deprecated: enroll each node instead (per-node secrets). It is still
+	// accepted unless RequireEnrollment is set.
 	NodeToken     string `yaml:"node_token"`
 	NodeTokenFile string `yaml:"node_token_file"`
+	// RequireEnrollment refuses the shared node token: every agent must
+	// enroll with a one-time token and use its own node secret.
+	RequireEnrollment bool `yaml:"require_enrollment"`
+	// CredentialsFile persists enrollment tokens and node secrets (hashes
+	// only). Defaults to node-credentials.json next to state_file.
+	CredentialsFile string `yaml:"credentials_file"`
 	// DNSToken lets DNS servers read pool endpoints and static records only.
 	DNSToken     string `yaml:"dns_token"`
 	DNSTokenFile string `yaml:"dns_token_file"`
@@ -152,9 +162,8 @@ type Controller struct {
 	// similar ranges (labs only); probes refuse to dial them otherwise.
 	AllowLoopbackNodes bool `yaml:"allow_loopback_nodes"`
 	// AllowAddressChange lets a node change its registered IPv4/IPv6 by
-	// heartbeat. Off by default: since every node shares the node token, a
-	// changed address must be accepted by an admin (delete the node, it then
-	// registers again).
+	// heartbeat. Off by default: a changed address must be accepted by an
+	// admin (delete the node, it then registers again).
 	AllowAddressChange bool `yaml:"allow_address_change"`
 	// ForgetAfter removes nodes that have been silent this long (0 = never).
 	ForgetAfter Duration `yaml:"forget_after"`
@@ -179,8 +188,16 @@ type Brand struct {
 type Agent struct {
 	ControllerURL string `yaml:"controller_url"`
 	ControllerCA  string `yaml:"controller_ca"`
+	// NodeToken is the shared token of all nodes (deprecated, see
+	// EnrollToken).
 	NodeToken     string `yaml:"node_token"`
 	NodeTokenFile string `yaml:"node_token_file"`
+	// EnrollToken is a one-time token from the controller admin. The agent
+	// exchanges it for its own node secret, stored in DataDir, and uses that
+	// secret from then on. The file is read again when the controller
+	// rejects the stored secret, so a new token can be dropped in place.
+	EnrollToken     string `yaml:"enroll_token"`
+	EnrollTokenFile string `yaml:"enroll_token_file"`
 
 	ID       string            `yaml:"id"`
 	Name     string            `yaml:"name"`
@@ -325,8 +342,11 @@ func (f *File) normalize() error {
 		if c.DNSToken, err = auth.Resolve(c.DNSToken, c.DNSTokenFile); err != nil {
 			return err
 		}
-		if c.AdminToken == "" || c.NodeToken == "" {
-			return fmt.Errorf("controller: admin_token and node_token are required")
+		if c.AdminToken == "" {
+			return fmt.Errorf("controller: admin_token is required")
+		}
+		if c.NodeToken == "" && !c.RequireEnrollment {
+			return fmt.Errorf("controller: node_token is required unless require_enrollment is true")
 		}
 		c.HeartbeatTimeout.Duration = orDefault(c.HeartbeatTimeout, 30*time.Second)
 		c.ProbeInterval.Duration = orDefault(c.ProbeInterval, 10*time.Second)
@@ -349,8 +369,20 @@ func (f *File) normalize() error {
 		if a.NodeToken, err = auth.Resolve(a.NodeToken, a.NodeTokenFile); err != nil {
 			return err
 		}
-		if a.ControllerURL == "" || a.NodeToken == "" {
-			return fmt.Errorf("agent: controller_url and node_token are required")
+		if a.EnrollToken != "" && a.EnrollTokenFile != "" {
+			return fmt.Errorf("agent: set enroll_token or enroll_token_file, not both")
+		}
+		// The enrollment token file may be removed once the node is
+		// enrolled; the agent then relies on the secret in data_dir.
+		if a.EnrollTokenFile != "" {
+			if b, err := os.ReadFile(a.EnrollTokenFile); err == nil {
+				a.EnrollToken = strings.TrimSpace(string(b))
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("agent: %w", err)
+			}
+		}
+		if a.ControllerURL == "" || (a.NodeToken == "" && a.EnrollToken == "" && a.EnrollTokenFile == "") {
+			return fmt.Errorf("agent: controller_url and enroll_token(_file) or node_token are required")
 		}
 		if a.DataDir == "" {
 			a.DataDir = "/var/lib/hcw"

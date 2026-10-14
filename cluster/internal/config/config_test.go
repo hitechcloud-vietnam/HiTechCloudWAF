@@ -46,6 +46,41 @@ func TestUnknownKeyRejected(t *testing.T) {
 	}
 }
 
+func TestEnrollmentSettings(t *testing.T) {
+	dir := t.TempDir()
+	load := func(body string) (*File, error) {
+		p := filepath.Join(dir, "c.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(p)
+	}
+	// require_enrollment makes the shared node token optional.
+	if _, err := load("controller:\n  admin_token: a\n"); err == nil {
+		t.Fatal("controller without node_token nor require_enrollment accepted")
+	}
+	if f, err := load("controller:\n  admin_token: a\n  require_enrollment: true\n"); err != nil || !f.Controller.RequireEnrollment {
+		t.Fatalf("require_enrollment: %v", err)
+	}
+	// An agent may enroll with a token file; the file may be gone once the
+	// node is enrolled.
+	tok := filepath.Join(dir, "enroll.token")
+	_ = os.WriteFile(tok, []byte("hcwe_x\n"), 0o600)
+	f, err := load("agent:\n  controller_url: https://c:7443\n  enroll_token_file: " + tok + "\n")
+	if err != nil || f.Agent.EnrollToken != "hcwe_x" {
+		t.Fatalf("enroll_token_file: %v %+v", err, f)
+	}
+	if _, err := load("agent:\n  controller_url: https://c:7443\n  enroll_token_file: " + tok + ".missing\n"); err != nil {
+		t.Fatalf("missing enroll token file: %v", err)
+	}
+	if _, err := load("agent:\n  controller_url: https://c:7443\n  enroll_token: a\n  enroll_token_file: " + tok + "\n"); err == nil {
+		t.Fatal("enroll_token and enroll_token_file both accepted")
+	}
+	if _, err := load("agent:\n  controller_url: https://c:7443\n"); err == nil {
+		t.Fatal("agent without any token accepted")
+	}
+}
+
 func TestControllerNeedsTokens(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "c.yaml")
 	_ = os.WriteFile(p, []byte("controller:\n  listen: \":7443\"\n"), 0o600)

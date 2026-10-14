@@ -1,5 +1,24 @@
 # Changelog
 
+## Chưa phát hành
+
+### Engine (`hcw-waf`)
+- **Trang Sự kiện**: lọc theo ứng dụng, loại, hành động, IP/CIDR, nội dung,
+  khoảng thời gian, rule, quốc gia; xuất CSV/JSON (chống chèn công thức
+  Excel, có ghi audit); bảng Top IP/URI/rule/quốc gia/loại; **chặn IP trên
+  mọi ứng dụng** bằng 1 click (`POST /api/open/site/ip-deny`).
+- Test bắt buộc mọi chuỗi giao diện đều có bản dịch tiếng Anh.
+
+### Cluster (`hcw`)
+- **Đăng ký node bằng token dùng một lần**: mỗi node có secret riêng gắn
+  với ID node (controller chỉ lưu hash), thu hồi/đổi secret, tạo token trên
+  dashboard; `install.sh agent --enroll-token-file`. Token dùng chung vẫn
+  chạy (có cảnh báo) cho tới khi bật `require_enrollment: true`.
+
+### Kiểm thử
+- Bộ kiểm thử đầu-cuối `e2e/` (2 engine, controller, agent, DNS, hcwctl)
+  chạy trong CI.
+
 ## v0.5.0 – 2026-10-14
 
 ### Bảo mật (từ đợt rà soát code)

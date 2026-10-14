@@ -67,6 +67,66 @@ Với engine HiTechCloud, mỗi heartbeat của agent gửi kèm:
 Controller cộng dồn thành số liệu toàn cluster và giữ 5000 sự kiện gần nhất
 trong bộ nhớ. Xem qua dashboard hoặc `GET /v1/events?limit=&node=` (admin).
 
+### Đăng ký node (enrollment) và secret riêng của từng node
+
+Mỗi node xác thực bằng **secret riêng** gắn với node ID của nó, thay cho token
+dùng chung:
+
+1. Admin tạo **enrollment token** dùng một lần trên dashboard (mục *Đăng ký
+   node*) hoặc `POST /v1/enroll-tokens`, có thể gắn sẵn `node_id`, `pools`,
+   `region` và thời hạn (`expires_in`, mặc định 24 giờ, tối đa 30 ngày).
+   Token (`hcwe_...`) chỉ hiển thị **một lần**.
+2. Trên node, ghi token vào file và cài agent:
+   `install.sh agent --controller https://ctl:7443 --enroll-token-file enroll.token --ca ca.crt`
+   (agent.yaml: `enroll_token_file: /etc/hcw/secrets/enroll.token`).
+3. Lần chạy đầu, agent gọi `POST /v1/enroll` một lần, nhận **node secret**
+   (`hcwn_...`, 256 bit ngẫu nhiên) và lưu vào
+   `<data_dir>/node-credential.json` (quyền 0600). Từ đó agent dùng secret này
+   cho heartbeat và snapshot; khởi động lại thì dùng lại secret đã lưu, không
+   đăng ký lại. Token đã dùng thì không dùng lại được.
+
+Controller chỉ lưu **hash SHA-256** của token và secret, trong
+`credentials_file` (mặc định `node-credentials.json` cạnh `state_file`, quyền
+0600); so sánh theo thời gian hằng (constant-time). Ràng buộc:
+
+- Secret của node A chỉ báo cáo được cho node A: heartbeat mang `id` khác bị
+  từ chối **403**; sự kiện tấn công luôn gắn với node của secret.
+- Nếu token có `pools` / `region` thì controller áp đặt các giá trị đó, bỏ qua
+  giá trị agent tự khai báo.
+- Token không gắn `node_id`: node ID là `id` trong agent.yaml, không có thì là
+  hostname (chữ thường); không được lấy ID của node đang có secret còn hiệu
+  lực (409). Token gắn `node_id` khác với `id` của agent → 403.
+- Khi một node ID đã đăng ký, token chung **không bao giờ** được chấp nhận cho
+  node đó nữa (kể cả sau khi thu hồi) — chỉ có thể đăng ký lại bằng token mới.
+
+**Thu hồi**: xoá node (dashboard, hoặc `DELETE /v1/nodes/{id}`) đồng thời thu
+hồi secret; agent nhận 401 và ghi log yêu cầu token mới. Enrollment token chưa
+dùng thu hồi bằng `DELETE /v1/enroll-tokens/{id}`.
+
+**Đổi secret (rotate)**: nút *Đổi secret* trên dashboard hoặc
+`POST /v1/nodes/{id}/rotate` tạo token mới gắn với node (giữ pools/region).
+Ghi token mới đè lên `enroll_token_file` trên node: agent đọc lại file mỗi chu
+kỳ, thấy token khác thì đăng ký lại, secret cũ hết hiệu lực ngay khi đăng ký
+xong (không cần khởi động lại). Thêm `{"revoke_current": true}` để vô hiệu
+secret cũ ngay lập tức.
+
+#### Chuyển đổi từ token chung (`node_token`)
+
+`node_token` vẫn hoạt động (tương thích ngược) nhưng đã **lỗi thời**: controller
+ghi cảnh báo khi khởi động và mỗi giờ một lần cho từng node còn dùng nó. Cột
+*Xác thực* của dashboard (`auth` trong `GET /v1/nodes`) cho biết node nào dùng
+`node_secret` hay `shared_token`. Các bước:
+
+1. Nâng cấp controller và agent (không cần đổi cấu hình, cluster chạy như cũ).
+2. Với từng node: tạo enrollment token gắn `node_id` của node, ghi vào
+   `/etc/hcw/secrets/enroll.token`, thêm `enroll_token_file:` vào agent.yaml
+   (có thể giữ `node_token_file` — agent chỉ quay về token chung khi chưa đăng
+   ký được), khởi động lại agent. Hoặc chạy lại
+   `install.sh agent ... --enroll-token-file enroll.token`.
+3. Khi mọi node đều hiện *secret riêng*, đặt `require_enrollment: true` trong
+   controller.yaml và khởi động lại controller: token chung bị từ chối (401),
+   có thể xoá `node_token_file` khỏi controller và các node.
+
 ![Dashboard cluster](images/cluster-dashboard.png)
 
 ## DNS
@@ -192,7 +252,8 @@ sudo cp cluster/examples/controller.yaml /etc/hcw/controller.yaml   # sửa cho 
 docker compose -f cluster/deploy/compose.controller.yaml up -d --build
 
 # 2) Mỗi node WAF (đã chạy engine stack bằng compose.yaml ở gốc repo)
-#    copy ca.crt + node.token từ controller sang /etc/hcw/...
+#    copy ca.crt từ controller sang /etc/hcw/tls/, tạo enrollment token trên
+#    dashboard và ghi vào /etc/hcw/secrets/enroll.token
 sudo cp cluster/examples/agent.yaml /etc/hcw/agent.yaml             # sửa id/ip/region/pools
 docker compose -f cluster/deploy/compose.node.yaml up -d --build
 
@@ -212,9 +273,12 @@ Dashboard: `https://controller.example.vn:7443/`, đăng nhập bằng `admin.to
 | Method & path | Token | Mô tả |
 |---|---|---|
 | `GET /healthz` | – | liveness |
-| `POST /v1/heartbeat` | node | agent báo cáo |
-| `GET /v1/config/snapshot` | node | snapshot cấu hình |
-| `GET /v1/nodes`, `GET/PATCH/DELETE /v1/nodes/{id}` | admin | quản lý node (`{"drain":true}`, `{"weight_override":50}`) |
+| `POST /v1/heartbeat` | node secret (hoặc node token chung, lỗi thời) | agent báo cáo |
+| `GET /v1/config/snapshot` | node secret (hoặc node token chung, lỗi thời) | snapshot cấu hình |
+| `POST /v1/enroll` | enrollment token | agent đổi token dùng một lần lấy node secret |
+| `GET/POST /v1/enroll-tokens`, `DELETE /v1/enroll-tokens/{id}` | admin | tạo / liệt kê / thu hồi enrollment token |
+| `GET /v1/nodes`, `GET/PATCH/DELETE /v1/nodes/{id}` | admin | quản lý node (`{"drain":true}`, `{"weight_override":50}`); `DELETE` thu hồi luôn secret |
+| `POST /v1/nodes/{id}/rotate` | admin | tạo token mới để đổi secret của node (`{"revoke_current":true}` để thu hồi ngay) |
 | `GET /v1/pools` | admin | các pool + endpoint |
 | `GET /v1/events` | admin | sự kiện tấn công toàn cluster |
 | `GET /v1/pools/{pool}/endpoints` | dns/admin | dùng cho DNS |
@@ -241,12 +305,19 @@ dig @127.0.0.1 -p 5353 x.cdn.waf.hitechcloud.vn A
 - Node không được khai báo địa chỉ loopback, link-local, multicast; probe
   của controller cũng từ chối kết nối tới các dải đó (bật
   `allow_loopback_nodes: true` chỉ khi thử nghiệm trong lab).
+- Enrollment token và node secret chỉ được lưu dưới dạng hash; token được
+  gửi qua TLS tới controller (agent bắt buộc `https://` trừ loopback), nên
+  luôn ghim CA (`controller_ca`).
+- Mỗi node có secret riêng (xem *Đăng ký node*): một node bị chiếm không thể
+  gửi heartbeat/sự kiện thay node khác (403). Bật `require_enrollment: true`
+  sau khi chuyển đổi xong để loại bỏ hẳn token dùng chung.
 - Một node đã đăng ký không thể đổi IPv4/IPv6 qua heartbeat (chống chiếm
   node bằng token dùng chung). Khi node đổi IP thật, xoá node trên dashboard
-  hoặc `DELETE /v1/nodes/{id}` rồi để agent đăng ký lại; hoặc đặt
-  `allow_address_change: true`.
+  hoặc `DELETE /v1/nodes/{id}` rồi để agent đăng ký lại (node dùng secret
+  riêng cần enrollment token mới); hoặc đặt `allow_address_change: true`.
 - Agent chỉ đồng bộ các collection cấu hình dưới `/api/open/` (không bao giờ
   users, backup/restore, audit, alerts, `me/`).
 - DNS server bắt buộc `https://` tới controller (trừ loopback).
 - `install.sh` kiểm tra SHA256 của binary với `SHA256SUMS` của release; dùng
-  `--node-token-file` / `--dns-token-file` để token không lộ trên dòng lệnh.
+  `--enroll-token-file` / `--node-token-file` / `--dns-token-file` để token
+  không lộ trên dòng lệnh.

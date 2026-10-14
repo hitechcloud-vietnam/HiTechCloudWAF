@@ -116,8 +116,10 @@ the caller's kind (see `x-required-token` in the spec):
 
 | Token | File on the controller | Used for |
 |---|---|---|
-| admin | `/etc/hcw/secrets/admin.token` | dashboard, nodes, pools, events, sync |
-| node | `/etc/hcw/secrets/node.token` | `POST /v1/heartbeat`, `GET /v1/config/snapshot` (agents) |
+| admin | `/etc/hcw/secrets/admin.token` | dashboard, nodes, pools, events, sync, enrollment tokens |
+| enrollment token (one-time, `hcwe_...`) | created by an admin, given to one node | `POST /v1/enroll` |
+| node secret (`hcwn_...`) | agent `data_dir/node-credential.json` | `POST /v1/heartbeat`, `GET /v1/config/snapshot` (its own node only) |
+| node (shared, deprecated) | `/etc/hcw/secrets/node.token` | same as the node secret, unless `require_enrollment: true` |
 | dns | `/etc/hcw/secrets/dns.token` | `GET /v1/pools/{pool}/endpoints` (DNS servers; admin also accepted) |
 
 Responses are plain JSON (no envelope); errors are plain-text messages.
@@ -135,6 +137,9 @@ curl --cacert /etc/hcw/tls/ca.crt -H "$A" "$CTL/v1/events?limit=50&node=hn-01"
 # Drain a node for maintenance, then put it back
 curl --cacert /etc/hcw/tls/ca.crt -H "$A" -X PATCH $CTL/v1/nodes/hn-01 -d '{"drain": true}'
 curl --cacert /etc/hcw/tls/ca.crt -H "$A" -X PATCH $CTL/v1/nodes/hn-01 -d '{"drain": false}'
+
+# One-time enrollment token for a new node (the token is shown once)
+curl --cacert /etc/hcw/tls/ca.crt -H "$A" $CTL/v1/enroll-tokens -d '{"node_id":"hn-02","pools":["web"],"expires_in":3600}'
 
 # Replication status, and refresh the snapshot from the primary now
 curl --cacert /etc/hcw/tls/ca.crt -H "$A" $CTL/v1/sync

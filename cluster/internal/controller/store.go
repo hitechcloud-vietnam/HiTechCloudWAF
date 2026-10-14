@@ -82,8 +82,9 @@ func (s *Store) listLocked() []*api.Node {
 	return out
 }
 
-// Heartbeat records a heartbeat. New nodes are persisted immediately.
-func (s *Store) Heartbeat(hb api.Heartbeat) (*api.Node, error) {
+// Heartbeat records a heartbeat authenticated as authKind (api.Auth*). New
+// nodes and authentication changes are persisted immediately.
+func (s *Store) Heartbeat(hb api.Heartbeat, authKind string) (*api.Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -92,10 +93,12 @@ func (s *Store) Heartbeat(hb api.Heartbeat) (*api.Node, error) {
 		n = &api.Node{FirstSeen: now}
 		s.nodes[hb.ID] = n
 	}
+	changed := !ok || n.Auth != authKind
 	n.Heartbeat = hb
 	n.LastSeen = now
+	n.Auth = authKind
 	var err error
-	if !ok {
+	if changed {
 		err = s.saveLocked()
 	}
 	c := *n

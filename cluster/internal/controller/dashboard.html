@@ -23,7 +23,8 @@
   th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
   th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
   .pill { padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
-  .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
+  .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); } .mut { background:var(--muted); }
+  .secret { display:block; margin:8px 0; padding:8px 10px; border:1px dashed var(--brand); border-radius:6px; font-family:ui-monospace, Menlo, Consolas, monospace; font-size:13px; word-break:break-all; user-select:all; }
   button, input, select { font:inherit; }
   button { background:var(--brand); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
   button.ghost { background:transparent; color:var(--brand); border:1px solid var(--brand); }
@@ -59,9 +60,36 @@
     </div>
     <h2>Nodes <button class="ghost" id="sync">Đồng bộ ngay</button></h2>
     <div class="wrap"><table>
-      <thead><tr><th>Trạng thái</th><th>Node</th><th>Region</th><th>Pools</th><th>IPv4</th><th>Weight</th><th>Load</th><th>RAM trống</th><th>Probe</th><th>Config</th><th>Heartbeat</th><th></th></tr></thead>
+      <thead><tr><th>Trạng thái</th><th>Node</th><th>Region</th><th>Pools</th><th>IPv4</th><th>Weight</th><th>Load</th><th>RAM trống</th><th>Probe</th><th>Config</th><th>Xác thực</th><th>Heartbeat</th><th></th></tr></thead>
       <tbody id="nodes"></tbody>
     </table></div>
+    <h2>Đăng ký node (enrollment token)</h2>
+    <div class="card form">
+      <input id="e-node" placeholder="Node ID (tuỳ chọn)" style="width:170px" title="Bỏ trống: agent dùng id cấu hình hoặc hostname">
+      <input id="e-pools" placeholder="Pools, vd. web,api" style="width:160px" title="Bỏ trống: agent tự khai báo">
+      <input id="e-region" placeholder="Region (tuỳ chọn)" style="width:140px">
+      <select id="e-exp" title="Thời hạn token">
+        <option value="3600">Hết hạn sau 1 giờ</option>
+        <option value="86400" selected>Hết hạn sau 24 giờ</option>
+        <option value="604800">Hết hạn sau 7 ngày</option>
+        <option value="2592000">Hết hạn sau 30 ngày</option>
+      </select>
+      <input id="e-comment" placeholder="Ghi chú" style="width:160px">
+      <button id="e-create">Tạo token</button>
+      <span class="err" id="e-err"></span>
+    </div>
+    <div class="card" id="e-out" hidden style="margin-bottom:12px">
+      <span class="muted" id="e-out-title"></span>
+      <code class="secret" id="e-token"></code>
+      <button id="e-copy">Sao chép</button> <button class="ghost" id="e-close">Đã lưu, ẩn token</button>
+      <p class="muted">Token chỉ hiển thị một lần và chỉ dùng được một lần. Trên node:
+        <code id="e-cmd"></code></p>
+    </div>
+    <div class="wrap"><table>
+      <thead><tr><th>Token</th><th>Node</th><th>Pools</th><th>Region</th><th>Trạng thái</th><th>Hết hạn</th><th>Đã dùng bởi</th><th>Ghi chú</th><th></th></tr></thead>
+      <tbody id="etokens"></tbody>
+    </table></div>
+    <p class="muted">Node đã đăng ký dùng secret riêng; xoá node sẽ thu hồi secret. Node còn dùng token chung (cột <em>Xác thực</em>) nên được đăng ký lại, sau đó bật <code>require_enrollment: true</code> trên controller.</p>
     <h2>Sự kiện tấn công toàn cluster</h2>
     <div class="wrap"><table>
       <thead><tr><th>Thời gian</th><th>Node</th><th>Host</th><th>IP</th><th>Request</th><th>Loại</th><th>Phân loại</th></tr></thead>
@@ -139,13 +167,21 @@
       tr.appendChild(td(n.stats.mem_avail_mb + " / " + n.stats.mem_total_mb + " MB"));
       tr.appendChild(n.probe_url ? (n.probe_ok ? td(n.probe_ms + " ms") : td("lỗi", "bad")) : td("–"));
       var cfg = td(n.config_error ? "lỗi" : (n.config_revision || "–")); if (n.config_error) cfg.title = n.config_error; tr.appendChild(cfg);
+      tr.appendChild(n.auth === "node_secret" ? td("secret riêng", "ok") : n.auth === "shared_token" ? td("token chung", "warn") : td("–"));
       tr.appendChild(td(ago(n.last_seen)));
       var act = document.createElement("td");
       var b = document.createElement("button"); b.className = "ghost"; b.textContent = n.drain ? "Bật lại" : "Drain";
       b.onclick = function () { api("PATCH", "/v1/nodes/" + encodeURIComponent(n.id), { drain: !n.drain }).then(load).catch(err); };
+      var rot = document.createElement("button"); rot.className = "ghost"; rot.style.marginLeft = "6px";
+      rot.textContent = n.auth === "node_secret" ? "Đổi secret" : "Đăng ký";
+      rot.title = "Tạo enrollment token gắn với node này; secret hiện tại hết hiệu lực khi token được dùng";
+      rot.onclick = function () {
+        if (!confirm("Tạo enrollment token mới cho node " + n.id + "?")) return;
+        api("POST", "/v1/nodes/" + encodeURIComponent(n.id) + "/rotate", {}).then(function (t) { showToken(t); load(); }).catch(err);
+      };
       var d = document.createElement("button"); d.className = "ghost"; d.textContent = "Xoá"; d.style.marginLeft = "6px";
-      d.onclick = function () { if (confirm("Xoá node " + n.id + " khỏi cluster?")) api("DELETE", "/v1/nodes/" + encodeURIComponent(n.id)).then(load).catch(err); };
-      act.appendChild(b); act.appendChild(d); tr.appendChild(act);
+      d.onclick = function () { if (confirm("Xoá node " + n.id + " khỏi cluster và thu hồi secret của node?")) api("DELETE", "/v1/nodes/" + encodeURIComponent(n.id)).then(load).catch(err); };
+      act.appendChild(b); act.appendChild(rot); act.appendChild(d); tr.appendChild(act);
       tb.appendChild(tr);
     });
     $("c-total").textContent = nodes.length; $("c-ok").textContent = ok; $("c-bad").textContent = nodes.length - ok;
@@ -202,15 +238,60 @@
     var dl = $("r-zones"); dl.textContent = "";
     Object.keys(zones).sort().forEach(function (z) { var o = document.createElement("option"); o.value = z; dl.appendChild(o); });
   }
+  var ESTATUS = { active: ["còn hiệu lực", "ok"], used: ["đã dùng", "mut"], expired: ["hết hạn", "warn"] };
+  function showToken(t) {
+    $("e-out-title").textContent = "Enrollment token " + t.id + (t.node_id ? " cho node " + t.node_id : "") + ", hết hạn " + new Date(t.expires_at).toLocaleString("vi-VN") + ":";
+    $("e-token").textContent = t.token;
+    $("e-cmd").textContent = "install.sh agent --controller " + location.origin + " --enroll-token-file enroll.token --ca ca.crt";
+    $("e-out").hidden = false;
+  }
+  function createToken() {
+    var body = { node_id: $("e-node").value.trim(), region: $("e-region").value.trim(), comment: $("e-comment").value.trim(),
+      expires_in: parseInt($("e-exp").value, 10) || 0,
+      pools: $("e-pools").value.split(",").map(function (p) { return p.trim(); }).filter(function (p) { return p; }) };
+    api("POST", "/v1/enroll-tokens", body).then(function (t) {
+      $("e-err").textContent = ""; ["e-node", "e-pools", "e-region", "e-comment"].forEach(function (id) { $(id).value = ""; });
+      showToken(t); load();
+    }).catch(function (e) { $("e-err").textContent = String(e.message || e); });
+  }
+  function renderTokens(list) {
+    var tb = $("etokens"); tb.textContent = "";
+    list.forEach(function (t) {
+      var tr = document.createElement("tr"), st = ESTATUS[t.status] || [t.status, "mut"];
+      tr.appendChild(td(t.id)); tr.appendChild(td(t.node_id || "(tự chọn)"));
+      tr.appendChild(td((t.pools || []).join(", ") || "–")); tr.appendChild(td(t.region || "–"));
+      tr.appendChild(td(st[0], st[1]));
+      tr.appendChild(td(new Date(t.expires_at).toLocaleString("vi-VN")));
+      tr.appendChild(td(t.used_by ? t.used_by + " · " + new Date(t.used_at).toLocaleString("vi-VN") : "–"));
+      tr.appendChild(td(t.comment || ""));
+      var act = document.createElement("td");
+      var d = document.createElement("button"); d.className = "ghost"; d.textContent = t.status === "active" ? "Thu hồi" : "Xoá";
+      d.onclick = function () {
+        if (t.status === "active" && !confirm("Thu hồi enrollment token " + t.id + "?")) return;
+        api("DELETE", "/v1/enroll-tokens/" + encodeURIComponent(t.id)).then(load).catch(err);
+      };
+      act.appendChild(d); tr.appendChild(act);
+      tb.appendChild(tr);
+    });
+    if (!list.length) { var tr = document.createElement("tr"); var c = td("Chưa có enrollment token."); c.colSpan = 9; tr.appendChild(c); tb.appendChild(tr); }
+  }
   function err(e) { $("err").textContent = String(e.message || e); }
   function load() {
     if (!token()) return;
-    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync"), api("GET", "/v1/events?limit=50"), api("GET", "/v1/dns/records")])
-      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); renderEvents(r[3]); renderRecords(r[4]); }).catch(err);
+    Promise.all([api("GET", "/v1/nodes"), api("GET", "/v1/pools"), api("GET", "/v1/sync"), api("GET", "/v1/events?limit=50"), api("GET", "/v1/dns/records"), api("GET", "/v1/enroll-tokens")])
+      .then(function (r) { $("err").textContent = ""; render(r[0], r[1], r[2]); renderEvents(r[3]); renderRecords(r[4]); renderTokens(r[5]); }).catch(err);
   }
   $("go").onclick = function () { setToken($("tok").value.trim()); $("tok").value = ""; show(); load(); };
   $("tok").onkeydown = function (e) { if (e.key === "Enter") $("go").onclick(); };
-  $("logout").onclick = function () { setToken(""); show(); };
+  $("logout").onclick = function () { setToken(""); $("e-out").hidden = true; $("e-token").textContent = ""; show(); };
+  $("e-create").onclick = createToken;
+  $("e-copy").onclick = function () {
+    var t = $("e-token").textContent, b = $("e-copy");
+    var done = function () { b.textContent = "Đã sao chép"; setTimeout(function () { b.textContent = "Sao chép"; }, 1500); };
+    if (navigator.clipboard) { navigator.clipboard.writeText(t).then(done).catch(function () { window.getSelection().selectAllChildren($("e-token")); }); }
+    else { window.getSelection().selectAllChildren($("e-token")); }
+  };
+  $("e-close").onclick = function () { $("e-out").hidden = true; $("e-token").textContent = ""; };
   $("r-type").onchange = hint;
   $("r-save").onclick = saveRecord;
   $("r-value").onkeydown = function (e) { if (e.key === "Enter") saveRecord(); };

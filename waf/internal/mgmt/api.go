@@ -180,15 +180,7 @@ func (a *API) Handler() http.Handler {
 		}
 		return nil, a.Store.DeleteCerts(b.IDs)
 	}))
-	mux.HandleFunc("GET /api/open/events", func(w http.ResponseWriter, r *http.Request) {
-		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		if limit <= 0 || limit > 1000 {
-			limit = 100
-		}
-		site, _ := strconv.Atoi(r.URL.Query().Get("site_id"))
-		ev := a.Events.Latest(limit, site)
-		ok(w, list[events.Event]{Data: ev, Total: len(ev)})
-	})
+	a.registerEventRoutes(mux)
 	mux.HandleFunc("GET /api/open/stats", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Stats()) })
 	mux.HandleFunc("GET /api/open/timeseries", func(w http.ResponseWriter, _ *http.Request) { ok(w, a.Events.Series(time.Now())) })
 	mux.HandleFunc("GET /api/open/metrics", a.metrics)

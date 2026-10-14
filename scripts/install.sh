@@ -2,7 +2,7 @@
 # HiTechCloud WAF installer (systemd).
 #
 #   install.sh node        [--public-console CIDR] [--geoip] [--version vX.Y.Z]
-#   install.sh agent       --controller https://ctl:7443 --node-token TOKEN --ca ca.crt [--region hn] [--pools web] [--ipv4 PUBLIC_IP]
+#   install.sh agent       --controller https://ctl:7443 {--enroll-token-file F | --node-token TOKEN} --ca ca.crt [--region hn] [--pools web] [--ipv4 PUBLIC_IP]
 #   install.sh controller  --name ctl.example.vn [--ip 203.0.113.5]
 #   install.sh dns         --controller https://ctl:7443 --dns-token TOKEN --ca ca.crt --zone waf.example.vn --ns ns1.waf.example.vn,ns2.waf.example.vn
 #
@@ -10,8 +10,8 @@
 #   --version vX.Y.Z   release to install (default: latest)
 #   --binary PATH      use a local binary instead of downloading
 #   --no-start         write files only
-#   --node-token-file F / --dns-token-file F  read the token from a file
-#                      (keeps it out of the process list and shell history)
+#   --enroll-token-file F (one-time, per node) / --node-token-file F (shared, deprecated)
+#   / --dns-token-file F  read the token from a file (out of ps and shell history)
 # Environment:
 #   HCW_REPO      GitHub repository (default hitechcloud-vietnam/HiTechCloudWAF)
 #   GITHUB_TOKEN  needed when the repository is private
@@ -26,7 +26,7 @@ START=1
 ROLE=${1:-}
 [ -n "$ROLE" ] && shift || true
 
-GEOIP=0 PUBLIC_CIDR="" CONTROLLER="" NODE_TOKEN="" DNS_TOKEN="" CA="" REGION="" POOLS="default" IPV4=""
+GEOIP=0 PUBLIC_CIDR="" CONTROLLER="" NODE_TOKEN="" ENROLL_TOKEN="" DNS_TOKEN="" CA="" REGION="" POOLS="default" IPV4=""
 NAME="" IP="" ZONE="" NS=""
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -42,6 +42,7 @@ while [ $# -gt 0 ]; do
     --controller) CONTROLLER=$2; shift 2 ;;
     --node-token) NODE_TOKEN=$2; shift 2 ;;
     --node-token-file) NODE_TOKEN=$(cat "$2") || exit 1; shift 2 ;;
+    --enroll-token-file) ENROLL_TOKEN=$(cat "$2") || exit 1; shift 2 ;;
     --dns-token) DNS_TOKEN=$2; shift 2 ;;
     --dns-token-file) DNS_TOKEN=$(cat "$2") || exit 1; shift 2 ;;
     --ca) CA=$2; shift 2 ;;
@@ -214,11 +215,21 @@ EOF
   ;;
 
 agent)
-  [ -n "$CONTROLLER" ] && [ -n "$NODE_TOKEN" ] || die "agent needs --controller and --node-token"
+  [ -n "$CONTROLLER" ] && { [ -n "$ENROLL_TOKEN" ] || [ -n "$NODE_TOKEN" ]; } || die "agent needs --controller and --enroll-token-file (or the deprecated --node-token)"
   install_bin hcw "hcw-linux-$ARCH"
   ensure_user hcw
   ETC="$ROOT/etc/hcw"; mkdir -p "$ETC/secrets" "$ETC/tls"
-  (umask 077; printf '%s\n' "$NODE_TOKEN" > "$ETC/secrets/node.token")
+  # The agent exchanges the one-time enrollment token for its own node
+  # secret, kept in /var/lib/hcw/node-credential.json.
+  ENROLL_LINE="" NODE_LINE=""
+  if [ -n "$ENROLL_TOKEN" ]; then
+    (umask 077; printf '%s\n' "$ENROLL_TOKEN" > "$ETC/secrets/enroll.token")
+    ENROLL_LINE="  enroll_token_file: /etc/hcw/secrets/enroll.token"
+  fi
+  if [ -n "$NODE_TOKEN" ]; then
+    (umask 077; printf '%s\n' "$NODE_TOKEN" > "$ETC/secrets/node.token")
+    NODE_LINE="  node_token_file: /etc/hcw/secrets/node.token"
+  fi
   [ -s "$ROOT/etc/hcw-waf/api.token" ] || die "install the node first (install.sh node)"
   (umask 077; cp "$ROOT/etc/hcw-waf/api.token" "$ETC/secrets/local-engine.token")
   CA_LINE=""
@@ -229,7 +240,8 @@ agent)
 agent:
   controller_url: $CONTROLLER
 $CA_LINE
-  node_token_file: /etc/hcw/secrets/node.token
+$ENROLL_LINE
+$NODE_LINE
   region: "${REGION}"
   pools: [${POOLS}]
   ipv4: $IPV4
@@ -298,7 +310,7 @@ EOF
   echo
   info "Controller installed: https://$NAME:7443/  (admin token: $ETC/secrets/admin.token)"
   echo "    Add a node:  install.sh node && install.sh agent --controller https://$NAME:7443 \\"
-  echo "                   --node-token \$(cat $ETC/secrets/node.token) --ca $ETC/tls/ca.crt"
+  echo "                   --enroll-token-file enroll.token --ca ca.crt   (one-time token from the dashboard)"
   echo "    Add DNS:     install.sh dns --controller https://$NAME:7443 --dns-token \$(cat $ETC/secrets/dns.token) --ca ca.crt --zone ... --ns ..."
   ;;
 

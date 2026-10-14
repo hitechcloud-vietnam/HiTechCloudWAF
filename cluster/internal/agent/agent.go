@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/api"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/auth"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/config"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/cluster/internal/engine"
 )
@@ -44,6 +45,25 @@ type Agent struct {
 	// lastEvent is the newest engine event already reported.
 	lastEvent   string
 	eventsKnown bool
+
+	hostname   string
+	idExplicit bool // agent.id is configured (not the hostname default)
+	// cred is the node secret obtained by enrollment; nil means the shared
+	// node token is used.
+	cred *credential
+	// refusedToken is the hash of an enrollment token the controller
+	// refused, so it is not retried until the token changes.
+	refusedToken string
+}
+
+// credential is the node secret stored in data_dir after enrollment.
+type credential struct {
+	NodeID string `json:"node_id"`
+	Secret string `json:"secret"`
+	// EnrollTokenSHA256 identifies the enrollment token the secret came
+	// from: a different token in the configuration triggers re-enrollment.
+	EnrollTokenSHA256 string    `json:"enroll_token_sha256"`
+	EnrolledAt        time.Time `json:"enrolled_at"`
 }
 
 const maxEventsPerBeat = 100
@@ -77,15 +97,20 @@ func New(cfg *config.Agent, log *slog.Logger) (*Agent, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
-	if cfg.ID == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return nil, err
-		}
-		cfg.ID = strings.ToLower(h)
+	h, err := os.Hostname()
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Name == "" {
-		cfg.Name = cfg.ID
+	a.hostname = strings.ToLower(h)
+	a.idExplicit = cfg.ID != ""
+	if err := a.loadCredential(); err != nil {
+		return nil, err
+	}
+	if cfg.ID == "" {
+		cfg.ID = a.hostname
+	}
+	if a.cred == nil && cfg.NodeToken == "" && a.enrollToken() == "" {
+		return nil, fmt.Errorf("node not enrolled: no node secret in %s and no enrollment token (enroll_token_file) or node_token", a.credFile())
 	}
 	if cfg.IPv4 == "" {
 		ip, err := outboundIPv4(u.Host)
@@ -129,6 +154,115 @@ func outboundIPv4(hostport string) (string, error) {
 
 func (a *Agent) revFile() string { return filepath.Join(a.cfg.DataDir, "applied-revision") }
 
+func (a *Agent) credFile() string { return filepath.Join(a.cfg.DataDir, "node-credential.json") }
+
+// enrollToken returns the current enrollment token. The file is read on
+// every call so a new token can be put in place without a restart.
+func (a *Agent) enrollToken() string {
+	if a.cfg.EnrollTokenFile != "" {
+		b, err := os.ReadFile(a.cfg.EnrollTokenFile)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	}
+	return a.cfg.EnrollToken
+}
+
+// loadCredential reads the node secret saved by a previous enrollment.
+func (a *Agent) loadCredential() error {
+	b, err := os.ReadFile(a.credFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var c credential
+	if err := json.Unmarshal(b, &c); err != nil || c.NodeID == "" || c.Secret == "" {
+		return fmt.Errorf("%s is not a valid node credential; remove it and enroll again", a.credFile())
+	}
+	if a.idExplicit && c.NodeID != a.cfg.ID {
+		a.log.Warn("stored node secret belongs to another node id; it is ignored", "stored", c.NodeID, "id", a.cfg.ID)
+		return nil
+	}
+	a.cred = &c
+	a.cfg.ID = c.NodeID
+	return nil
+}
+
+func (a *Agent) saveCredential(c *credential) error {
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(a.cfg.DataDir, 0o700); err != nil {
+		return err
+	}
+	tmp := a.credFile() + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, a.credFile())
+}
+
+// ensureEnrolled enrolls when an enrollment token is configured that has
+// not produced the stored secret yet (first start, or a new token for
+// rotation). It fails only when the agent has no credential at all.
+func (a *Agent) ensureEnrolled(ctx context.Context) error {
+	if tok := a.enrollToken(); tok != "" {
+		h := auth.Hash(tok)
+		if (a.cred == nil || a.cred.EnrollTokenSHA256 != h) && h != a.refusedToken {
+			err := a.enroll(ctx, tok, h)
+			if err == nil {
+				return nil
+			}
+			var he *httpError
+			if errors.As(err, &he) && he.Status/100 == 4 {
+				a.refusedToken = h
+				a.log.Error("enrollment token refused by the controller; ask an admin for a new one", "err", err)
+			} else {
+				a.log.Warn("enrollment failed, retrying", "err", err)
+			}
+			if a.cred == nil && a.cfg.NodeToken == "" {
+				return fmt.Errorf("enroll: %w", err)
+			}
+		}
+	}
+	if a.cred == nil && a.cfg.NodeToken == "" {
+		return errors.New("node not enrolled: put a new enrollment token in enroll_token_file")
+	}
+	return nil
+}
+
+func (a *Agent) enroll(ctx context.Context, token, tokenHash string) error {
+	req := api.EnrollRequest{Hostname: a.hostname}
+	if a.idExplicit {
+		req.ID = a.cfg.ID
+	}
+	var res api.EnrollResponse
+	if err := a.do(ctx, http.MethodPost, "/v1/enroll", token, req, &res); err != nil {
+		return err
+	}
+	if res.NodeID == "" || res.Secret == "" {
+		return errors.New("controller returned an empty node secret")
+	}
+	if a.idExplicit && res.NodeID != a.cfg.ID {
+		return fmt.Errorf("controller enrolled node %q, configured id is %q", res.NodeID, a.cfg.ID)
+	}
+	c := &credential{NodeID: res.NodeID, Secret: res.Secret, EnrollTokenSHA256: tokenHash, EnrolledAt: time.Now().UTC()}
+	if err := a.saveCredential(c); err != nil {
+		// The token is spent: keep the secret in memory so the node keeps
+		// working, but it will need a new token after a restart.
+		a.log.Error("could not store the node secret; a new enrollment token will be needed after a restart", "file", a.credFile(), "err", err)
+	}
+	a.cred = c
+	a.cfg.ID = res.NodeID
+	a.log.Info("node enrolled; using its own node secret from now on", "node", res.NodeID, "file", a.credFile())
+	return nil
+}
+
 // Run loops until ctx is done.
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("agent started", "node", a.cfg.ID, "controller", a.base.String(), "apply_config", a.cfg.ApplyConfig)
@@ -148,8 +282,15 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // Tick sends one heartbeat and applies configuration when it changed.
 func (a *Agent) Tick(ctx context.Context) error {
+	if err := a.ensureEnrolled(ctx); err != nil {
+		return err
+	}
+	name := a.cfg.Name
+	if name == "" {
+		name = a.cfg.ID
+	}
 	hb := api.Heartbeat{
-		ID: a.cfg.ID, Name: a.cfg.Name, Region: a.cfg.Region, Pools: a.cfg.Pools,
+		ID: a.cfg.ID, Name: name, Region: a.cfg.Region, Pools: a.cfg.Pools,
 		IPv4: a.cfg.IPv4, IPv6: a.cfg.IPv6, Weight: a.cfg.Weight, Labels: a.cfg.Labels,
 		Version: Version, ProbeURL: a.cfg.ProbeURL,
 		EngineHealthy: true, ConfigRevision: a.appliedRev, ConfigError: a.configErr,
@@ -169,6 +310,10 @@ func (a *Agent) Tick(ctx context.Context) error {
 		ConfigRevision string `json:"config_revision"`
 	}
 	if err := a.call(ctx, http.MethodPost, "/v1/heartbeat", hb, &resp); err != nil {
+		var he *httpError
+		if a.cred != nil && errors.As(err, &he) && he.Status == http.StatusUnauthorized {
+			return fmt.Errorf("heartbeat: the node secret was rejected (revoked?); put a new enrollment token in enroll_token_file: %w", err)
+		}
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	if len(hb.Events) > 0 {
@@ -278,7 +423,25 @@ func (a *Agent) applyConfig(ctx context.Context) {
 	}
 }
 
+// httpError is a non-2xx answer of the controller.
+type httpError struct {
+	Status int
+	Body   string
+}
+
+func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Body) }
+
+// call talks to the controller with the node secret, or the shared node
+// token when the node is not enrolled.
 func (a *Agent) call(ctx context.Context, method, path string, in, out any) error {
+	token := a.cfg.NodeToken
+	if a.cred != nil {
+		token = a.cred.Secret
+	}
+	return a.do(ctx, method, path, token, in, out)
+}
+
+func (a *Agent) do(ctx context.Context, method, path, token string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -293,7 +456,7 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.NodeToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hcw-agent/"+Version)
 	resp, err := a.http.Do(req)
@@ -303,7 +466,7 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &httpError{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	if out == nil {
 		return nil

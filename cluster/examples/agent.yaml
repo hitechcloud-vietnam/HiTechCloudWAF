@@ -2,7 +2,13 @@
 agent:
   controller_url: https://controller.example.vn:7443
   controller_ca: /etc/hcw/tls/ca.crt
-  node_token_file: /etc/hcw/secrets/node.token
+  # One-time enrollment token from the controller admin (dashboard or
+  # POST /v1/enroll-tokens). On first start the agent exchanges it for its
+  # own node secret, stored in data_dir/node-credential.json (0600).
+  enroll_token_file: /etc/hcw/secrets/enroll.token
+  # Deprecated shared token of all nodes (refused when the controller sets
+  # require_enrollment: true):
+  # node_token_file: /etc/hcw/secrets/node.token
 
   id: waf-hn-01              # defaults to the hostname
   name: "Hà Nội 01"

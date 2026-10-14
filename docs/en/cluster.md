@@ -71,6 +71,68 @@ The controller sums these into cluster-wide figures and keeps the latest 5000
 events in memory. View them on the dashboard or with
 `GET /v1/events?limit=&node=` (admin).
 
+### Node enrollment and per-node secrets
+
+Every node authenticates with its **own secret**, bound to its node ID,
+instead of a token shared by all nodes:
+
+1. An admin creates a one-time **enrollment token** on the dashboard
+   (*Đăng ký node* section) or with `POST /v1/enroll-tokens`, optionally bound
+   to a `node_id`, `pools`, `region`, with an expiry (`expires_in`, default 24
+   hours, at most 30 days). The token (`hcwe_...`) is shown **once**.
+2. On the node, write the token to a file and install the agent:
+   `install.sh agent --controller https://ctl:7443 --enroll-token-file enroll.token --ca ca.crt`
+   (agent.yaml: `enroll_token_file: /etc/hcw/secrets/enroll.token`).
+3. On first start the agent calls `POST /v1/enroll` once, receives a **node
+   secret** (`hcwn_...`, 256 random bits) and stores it in
+   `<data_dir>/node-credential.json` (mode 0600). From then on it uses that
+   secret for heartbeats and snapshots; after a restart it reuses the stored
+   secret instead of enrolling again. A used token cannot be used again.
+
+The controller stores only **SHA-256 hashes** of tokens and secrets, in
+`credentials_file` (default `node-credentials.json` next to `state_file`, mode
+0600), and compares them in constant time. Rules:
+
+- Node A's secret can only report for node A: a heartbeat with another `id`
+  is refused with **403**; attack events are always attributed to the
+  secret's node.
+- When the token sets `pools` / `region`, the controller enforces them and
+  ignores what the agent reports.
+- Unbound token: the node ID is the agent's configured `id`, else its
+  lower-cased hostname; it cannot take the ID of a node holding an active
+  secret (409). A token bound to a `node_id` other than the agent's `id` → 403.
+- Once a node ID has enrolled, the shared token is **never** accepted for it
+  again (even after revocation); it can only enroll again with a new token.
+
+**Revocation**: deleting a node (dashboard, or `DELETE /v1/nodes/{id}`) also
+revokes its secret; the agent gets 401 and logs that it needs a new token.
+Unused enrollment tokens are revoked with `DELETE /v1/enroll-tokens/{id}`.
+
+**Rotation**: the *Đổi secret* button or `POST /v1/nodes/{id}/rotate` creates a
+new token bound to the node (keeping its pools/region). Overwrite the node's
+`enroll_token_file` with it: the agent re-reads the file every interval,
+notices the new token and enrolls again; the old secret stops working as soon
+as it has (no restart needed). Pass `{"revoke_current": true}` to invalidate
+the old secret immediately.
+
+#### Migrating from the shared `node_token`
+
+`node_token` keeps working (backward compatible) but is **deprecated**: the
+controller logs a warning at start-up and once an hour for each node still
+using it. The dashboard's *Xác thực* column (`auth` in `GET /v1/nodes`) shows
+whether a node uses `node_secret` or `shared_token`. Steps:
+
+1. Upgrade the controller and the agents (no configuration change needed; the
+   cluster runs as before).
+2. For each node: create an enrollment token bound to the node's `node_id`,
+   write it to `/etc/hcw/secrets/enroll.token`, add `enroll_token_file:` to
+   agent.yaml (`node_token_file` may stay: the agent only falls back to the
+   shared token while it is not enrolled) and restart the agent. Or re-run
+   `install.sh agent ... --enroll-token-file enroll.token`.
+3. Once every node shows a per-node secret, set `require_enrollment: true` in
+   controller.yaml and restart the controller: the shared token is refused
+   (401) and `node_token_file` can be removed from the controller and nodes.
+
 ![Cluster dashboard](../images/cluster-dashboard.png)
 
 ## Quick deployment
@@ -83,7 +145,8 @@ sudo cp cluster/examples/controller.yaml /etc/hcw/controller.yaml   # adapt it
 docker compose -f cluster/deploy/compose.controller.yaml up -d --build
 
 # 2) Each WAF node (already running the engine stack with compose.yaml at the repo root)
-#    copy ca.crt + node.token from the controller to /etc/hcw/...
+#    copy ca.crt from the controller to /etc/hcw/tls/, create an enrollment
+#    token on the dashboard and write it to /etc/hcw/secrets/enroll.token
 sudo cp cluster/examples/agent.yaml /etc/hcw/agent.yaml             # edit id/ip/region/pools
 docker compose -f cluster/deploy/compose.node.yaml up -d --build
 
@@ -106,9 +169,12 @@ Full specification: [`docs/api/cluster.openapi.yaml`](../api/cluster.openapi.yam
 | Method & path | Token | Description |
 |---|---|---|
 | `GET /healthz` | – | liveness |
-| `POST /v1/heartbeat` | node | agent report |
-| `GET /v1/config/snapshot` | node | configuration snapshot |
-| `GET /v1/nodes`, `GET/PATCH/DELETE /v1/nodes/{id}` | admin | node management (`{"drain":true}`, `{"weight_override":50}`) |
+| `POST /v1/heartbeat` | node secret (or the deprecated shared node token) | agent report |
+| `GET /v1/config/snapshot` | node secret (or the deprecated shared node token) | configuration snapshot |
+| `POST /v1/enroll` | enrollment token | agent exchanges a one-time token for its node secret |
+| `GET/POST /v1/enroll-tokens`, `DELETE /v1/enroll-tokens/{id}` | admin | create / list / revoke enrollment tokens |
+| `GET /v1/nodes`, `GET/PATCH/DELETE /v1/nodes/{id}` | admin | node management (`{"drain":true}`, `{"weight_override":50}`); `DELETE` also revokes the node secret |
+| `POST /v1/nodes/{id}/rotate` | admin | new token to replace the node's secret (`{"revoke_current":true}` revokes at once) |
 | `GET /v1/pools` | admin | pools + endpoints |
 | `GET /v1/events` | admin | cluster-wide attack events |
 | `GET /v1/pools/{pool}/endpoints` | dns/admin | used by DNS |

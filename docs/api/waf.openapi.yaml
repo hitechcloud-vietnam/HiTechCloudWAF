@@ -254,6 +254,73 @@ paths:
         "500":
           $ref: "#/components/responses/ApplyFailed"
 
+  /api/open/site/ip-deny:
+    post:
+      tags: [sites]
+      operationId: denySiteIP
+      summary: Add an address or prefix to the deny list of several sites
+      description: |
+        Appends `ip` (an address or CIDR prefix, normalised to a prefix) to
+        `ip_deny` of the listed sites, or of every site when `site_ids` is
+        empty or absent, and applies the configuration once. Sites that
+        already deny exactly this prefix are left unchanged. `0.0.0.0/0` and
+        `::/0` are refused. The console uses this for "block this IP" on an
+        event.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ip]
+              properties:
+                ip:
+                  type: string
+                  examples: ["203.0.113.7", "198.51.100.0/24"]
+                site_ids:
+                  type: array
+                  items:
+                    type: integer
+                  description: Sites to change; empty or absent = every site.
+      responses:
+        "200":
+          description: The deny lists were updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [ip, added, unchanged]
+                        properties:
+                          ip:
+                            type: string
+                            description: The normalised prefix, e.g. `203.0.113.7/32`.
+                          added:
+                            type: array
+                            items:
+                              type: integer
+                            description: Sites whose deny list now holds the prefix.
+                          unchanged:
+                            type: array
+                            items:
+                              type: integer
+                            description: Sites that already denied it.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+
   /api/open/cert:
     get:
       tags: [certs]
@@ -374,7 +441,12 @@ paths:
     get:
       tags: [monitoring]
       operationId: listEvents
-      summary: Latest security events, newest first
+      summary: Security events matching a filter, newest first
+      description: |
+        Searches the events kept in memory (`events_kept` in `waf.yaml`).
+        Results are ordered by event time, newest first; events with the same
+        time keep the order in which they were recorded, so repeated calls
+        return a stable order. All filters are optional and combine with AND.
       x-required-role: viewer
       parameters:
         - name: limit
@@ -385,11 +457,15 @@ paths:
             default: 100
             minimum: 1
             maximum: 1000
-        - name: site_id
-          in: query
-          description: Only events of this site (0 or absent = all sites).
-          schema:
-            type: integer
+        - $ref: "#/components/parameters/EventSiteID"
+        - $ref: "#/components/parameters/EventKind"
+        - $ref: "#/components/parameters/EventAction"
+        - $ref: "#/components/parameters/EventIP"
+        - $ref: "#/components/parameters/EventCountry"
+        - $ref: "#/components/parameters/EventRule"
+        - $ref: "#/components/parameters/EventText"
+        - $ref: "#/components/parameters/EventSince"
+        - $ref: "#/components/parameters/EventUntil"
       responses:
         "200":
           description: Events.
@@ -410,6 +486,144 @@ paths:
                               $ref: "#/components/schemas/Event"
                           total:
                             type: integer
+                            description: Number of events returned.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/events/export:
+    get:
+      tags: [monitoring]
+      operationId: exportEvents
+      summary: Download matching events as CSV or JSON
+      description: |
+        Takes the same filters as `GET /api/open/events` and returns a file
+        download (not the envelope), newest first. Every export is recorded
+        in the audit log, because events contain client data.
+
+        **CSV** (`text/csv; charset=utf-8`, RFC 4180 quoting) has the columns
+        `time, id, site_id, site, host, client_ip, country, method, uri,
+        user_agent, kind, action, status, feed, rule_ids, rule_msgs, tags`.
+        `rule_ids` and `tags` are space separated, `rule_msgs` is separated
+        by ` | `. To stop spreadsheet formula injection, a cell starting with
+        `=`, `+`, `-`, `@`, tab, CR or LF is prefixed with a single quote
+        (`'`).
+
+        **JSON** is an array of `Event` objects.
+      x-required-role: viewer
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+        - name: limit
+          in: query
+          description: Maximum number of events; absent or 0 = every matching event kept in memory.
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: "#/components/parameters/EventSiteID"
+        - $ref: "#/components/parameters/EventKind"
+        - $ref: "#/components/parameters/EventAction"
+        - $ref: "#/components/parameters/EventIP"
+        - $ref: "#/components/parameters/EventCountry"
+        - $ref: "#/components/parameters/EventRule"
+        - $ref: "#/components/parameters/EventText"
+        - $ref: "#/components/parameters/EventSince"
+        - $ref: "#/components/parameters/EventUntil"
+      responses:
+        "200":
+          description: The export.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="hcw-waf-events-YYYYMMDD-HHMMSS.csv"` (or `.json`)'
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: |
+                time,id,site_id,site,host,client_ip,country,method,uri,user_agent,kind,action,status,feed,rule_ids,rule_msgs,tags
+                2026-10-14T08:00:00Z,9f2c4e1ab03d7781,1,shop,shop.example.vn,203.0.113.7,VN,GET,/login?id=1'+OR+1=1,sqlmap/1.7,waf,block,403,,942100 949110,SQL Injection Attack Detected | Inbound Anomaly Score Exceeded,attack-sqli
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/events/top:
+    get:
+      tags: [monitoring]
+      operationId: topEvents
+      summary: Most frequent client IPs, URIs, rules, countries or kinds
+      description: |
+        Counts the matching events by one dimension and returns the largest
+        groups, largest first (ties by key). Takes the same filters as
+        `GET /api/open/events`. With `by=uri` the query string is ignored
+        (`/login?id=1` counts as `/login`); with `by=rule` an event counts
+        once for each matched rule and `label` holds the rule message;
+        events without a country or rule are not counted under `country` or
+        `rule`.
+      x-required-role: viewer
+      parameters:
+        - name: by
+          in: query
+          schema:
+            type: string
+            enum: [ip, uri, rule, country, kind]
+            default: ip
+        - name: limit
+          in: query
+          description: Number of groups (1-100; other values mean 20).
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - $ref: "#/components/parameters/EventSiteID"
+        - $ref: "#/components/parameters/EventKind"
+        - $ref: "#/components/parameters/EventAction"
+        - $ref: "#/components/parameters/EventIP"
+        - $ref: "#/components/parameters/EventCountry"
+        - $ref: "#/components/parameters/EventRule"
+        - $ref: "#/components/parameters/EventText"
+        - $ref: "#/components/parameters/EventSince"
+        - $ref: "#/components/parameters/EventUntil"
+      responses:
+        "200":
+          description: The groups.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/TopEvents"
+              example:
+                data:
+                  by: ip
+                  total: 42
+                  items:
+                    - {key: 203.0.113.7, count: 30}
+                    - {key: 198.51.100.4, count: 12}
+                err: null
+                msg: ""
+        "400":
+          $ref: "#/components/responses/Invalid"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1179,6 +1393,68 @@ components:
       name: X-HCW-Session
       description: Console session token from `POST /api/auth/login`. Acts with the user's role.
 
+  parameters:
+    EventSiteID:
+      name: site_id
+      in: query
+      description: Only events of this site (0 or absent = all sites).
+      schema:
+        type: integer
+        minimum: 0
+    EventKind:
+      name: kind
+      in: query
+      description: Comma-separated event kinds (`waf`, `rule`, `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot`, `auth`, `threat_intel`, `bad_path`).
+      schema:
+        type: string
+      example: waf,bot
+    EventAction:
+      name: action
+      in: query
+      description: Comma-separated actions (`block`, `monitor`, `challenge`).
+      schema:
+        type: string
+      example: block
+    EventIP:
+      name: ip
+      in: query
+      description: Client address, exact (`203.0.113.7`) or a CIDR prefix (`203.0.113.0/24`, `2001:db8::/32`).
+      schema:
+        type: string
+    EventCountry:
+      name: country
+      in: query
+      description: Comma-separated ISO 3166-1 alpha-2 country codes of the client (needs `geoip_db`).
+      schema:
+        type: string
+      example: VN,US
+    EventRule:
+      name: rule
+      in: query
+      description: Only events that matched this WAF rule ID.
+      schema:
+        type: integer
+        minimum: 1
+    EventText:
+      name: q
+      in: query
+      description: Case-insensitive substring of the URI, host, user agent or event ID (at most 256 bytes).
+      schema:
+        type: string
+        maxLength: 256
+    EventSince:
+      name: since
+      in: query
+      description: Only events at or after this time. RFC 3339 (`2026-10-14T08:00:00Z`) or a duration back from now (`15m`, `1h`, `24h`, `7d`).
+      schema:
+        type: string
+    EventUntil:
+      name: until
+      in: query
+      description: Only events at or before this time; same formats as `since`.
+      schema:
+        type: string
+
   responses:
     OKNull:
       description: Done.
@@ -1657,10 +1933,13 @@ components:
           type: string
         kind:
           type: string
-          description: "What decided: `waf`, `rule` (path rule deny), `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot` or `auth`."
+          description: "What decided: `waf`, `rule` (path rule deny), `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot`, `auth`, `threat_intel` or `bad_path` (malformed request path)."
         action:
           type: string
-          description: "`block` or `monitor`."
+          description: "`block` or `monitor`; `challenge` for `threat_intel` events."
+        feed:
+          type: string
+          description: Threat-intelligence list of a `threat_intel` event.
         status:
           type: integer
         rules:
@@ -1671,6 +1950,31 @@ components:
           type: array
           items:
             type: string
+
+    TopEvents:
+      type: object
+      required: [by, total, items]
+      properties:
+        by:
+          type: string
+          enum: [ip, uri, rule, country, kind]
+        total:
+          type: integer
+          description: Number of matching events that were counted.
+        items:
+          type: array
+          items:
+            type: object
+            required: [key, count]
+            properties:
+              key:
+                type: string
+                description: The IP, URI path, rule ID, country code or kind.
+              label:
+                type: string
+                description: Rule message (`by=rule` only).
+              count:
+                type: integer
 
     Counters:
       type: object

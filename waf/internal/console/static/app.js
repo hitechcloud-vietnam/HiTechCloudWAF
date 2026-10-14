@@ -67,10 +67,13 @@
   function nums(s) { return lines(s).map(Number).filter(function (x) { return x > 0; }); }
   function num(v, d) { var n = parseInt(v, 10); return isNaN(n) ? d : n; }
 
+  function authHeaders() {
+    return session() ? { "X-HCW-Session": session(), "Content-Type": "application/json" } : { "X-HCW-API-TOKEN": token(), "Content-Type": "application/json" };
+  }
   function api(method, path, body) {
     return fetch(path, {
       method: method,
-      headers: session() ? { "X-HCW-Session": session(), "Content-Type": "application/json" } : { "X-HCW-API-TOKEN": token(), "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body)
     }).then(function (r) {
       return r.json().catch(function () { return { err: "http_" + r.status, msg: r.statusText }; }).then(function (j) {
@@ -485,57 +488,197 @@
   }
 
   // ---------- events ----------
-  function eventsView(v) {
-    v.appendChild(el("h1", { text: t("Sự kiện tấn công") }));
-    var bar = el("div", { class: "row" });
-    var list = el("div");
-    var detail = el("div");
-    v.appendChild(bar); v.appendChild(el("div", { class: "spacer" })); v.appendChild(detail); v.appendChild(list);
-    loadAll().then(function () {
-      var sel = select("ev-site", [[0, t("Tất cả ứng dụng")]].concat(state.sites.map(function (s) { return [s.id, s.name]; })), 0);
-      sel.addEventListener("change", load);
-      bar.appendChild(el("div", {}, [sel])); bar.appendChild(el("button", { class: "btn", text: t("Làm mới"), onclick: load }));
-      load();
+  // The filter lives here so it survives navigation and language switches.
+  var evf = { site: "0", kind: "", action: "", ip: "", q: "", since: "24h", country: "", rule: "" };
+  var evTopBy = "ip";
+  var EV_LIMIT = 500;
+  function kindOptions() {
+    return [["", t("Mọi loại")], ["waf", t("WAF (OWASP CRS)")], ["rule", t("Rule theo đường dẫn")], ["rate_limit", t("Giới hạn tốc độ")],
+      ["ip_deny", t("IP trong denylist")], ["ip_allow", t("Ngoài allowlist")], ["geo", t("Chặn theo quốc gia")], ["bot", t("Anti-bot")],
+      ["auth", t("Bảo vệ bằng mật khẩu")], ["threat_intel", t("Threat intelligence")], ["bad_path", t("Đường dẫn không hợp lệ")]];
+  }
+  function actionOptions() { return [["", t("Mọi hành động")], ["block", tc("evaction", "Chặn")], ["monitor", t("Giám sát")], ["challenge", t("Thử thách anti-bot")]]; }
+  function rangeOptions() { return [["15m", t("15 phút")], ["1h", t("1 giờ")], ["24h", t("24 giờ")], ["7d", t("7 ngày")], ["", t("Tất cả")]]; }
+  function topOptions() { return [["ip", t("IP")], ["uri", t("URI")], ["rule", t("Rule")], ["country", t("Quốc gia")], ["kind", t("Loại")]]; }
+  function optionLabel(opts, v) { for (var i = 0; i < opts.length; i++) if (opts[i][0] === v) return opts[i][1]; return v; }
+  // evQuery renders the current filter as query parameters.
+  function evQuery() {
+    var p = [];
+    [["site_id", evf.site === "0" ? "" : evf.site], ["kind", evf.kind], ["action", evf.action], ["ip", evf.ip], ["q", evf.q],
+     ["since", evf.since], ["country", evf.country], ["rule", evf.rule]].forEach(function (kv) {
+      var v = String(kv[1] || "").trim();
+      if (v) p.push(kv[0] + "=" + encodeURIComponent(v));
     });
+    return p.join("&");
+  }
+  function exportEvents(format) {
+    fetch("/api/open/events/export?format=" + format + "&" + evQuery(), { headers: authHeaders() }).then(function (r) {
+      if (r.status === 401) { signOut(); show(); }
+      if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || j.err || ("HTTP " + r.status)); }, function () { throw new Error("HTTP " + r.status); });
+      var m = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "");
+      var name = m ? m[1] : "hcw-waf-events." + format;
+      return r.blob().then(function (b) {
+        var url = URL.createObjectURL(b);
+        var a = el("a", { href: url, download: name });
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        toast(t("Đã xuất {0}", name));
+      });
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function eventsView(v) {
+    v.appendChild(el("div", { class: "row" }, [el("h1", { text: t("Sự kiện tấn công") }), el("span", { class: "spacer" }),
+      el("button", { class: "btn", id: "ev-csv", text: t("Xuất CSV"), title: t("Tải các sự kiện khớp bộ lọc"), onclick: function () { exportEvents("csv"); } }),
+      el("button", { class: "btn", id: "ev-json", text: t("Xuất JSON"), title: t("Tải các sự kiện khớp bộ lọc"), onclick: function () { exportEvents("json"); } })]));
+    var bar = el("form", { class: "card filters", id: "ev-filters", role: "search" });
+    var chips = el("div", { class: "row chips", id: "ev-chips" });
+    var detail = el("div");
+    var summary = el("p", { class: "muted", id: "ev-summary" });
+    var list = el("div");
+    var topBox = el("div", { class: "card top-panel", id: "ev-top" });
+    v.appendChild(bar); v.appendChild(chips); v.appendChild(detail);
+    v.appendChild(el("div", { class: "ev-grid" }, [el("div", {}, [summary, list]), topBox]));
+    var seq = 0;
+
+    loadAll().then(function () {
+      var siteSel = select("ev-site", [[0, t("Tất cả ứng dụng")]].concat(state.sites.map(function (s) { return [s.id, s.name]; })), evf.site);
+      var kindSel = select("ev-kind", kindOptions(), evf.kind);
+      var actSel = select("ev-action", actionOptions(), evf.action);
+      siteSel.setAttribute("aria-label", t("Ứng dụng")); kindSel.setAttribute("aria-label", t("Loại"));
+      actSel.setAttribute("aria-label", t("Hành động"));
+      [siteSel, kindSel, actSel].forEach(function (s) { s.addEventListener("change", load); });
+      var ip = el("input", { id: "ev-ip", value: evf.ip, placeholder: t("IP hoặc CIDR"), "aria-label": t("IP hoặc CIDR"), autocomplete: "off", spellcheck: "false" });
+      var q = el("input", { id: "ev-q", type: "search", class: "wide", value: evf.q, placeholder: t("Tìm trong URI, tên miền, User-Agent"), "aria-label": t("Tìm trong URI, tên miền, User-Agent"), autocomplete: "off" });
+      var range = el("div", { class: "seg", role: "group", "aria-label": t("Khoảng thời gian") }, rangeOptions().map(function (o) {
+        return el("button", { type: "button", "data-since": o[0], class: o[0] === evf.since ? "active" : "", "aria-pressed": o[0] === evf.since ? "true" : "false", text: o[1],
+          onclick: function () { evf.since = o[0]; load(); } });
+      }));
+      bar.appendChild(el("div", { class: "filter-grid" }, [siteSel, kindSel, actSel, ip, q]));
+      bar.appendChild(el("div", { class: "row" }, [range, el("span", { class: "spacer" }),
+        el("button", { type: "button", class: "btn ghost", id: "ev-reset", text: t("Xoá bộ lọc"), onclick: function () {
+          evf = { site: "0", kind: "", action: "", ip: "", q: "", since: "24h", country: "", rule: "" };
+          siteSel.value = "0"; kindSel.value = ""; actSel.value = ""; ip.value = ""; q.value = "";
+          load();
+        } }),
+        el("button", { type: "button", class: "btn", text: t("Làm mới"), onclick: load }),
+        el("button", { type: "submit", class: "btn primary", id: "ev-apply", text: t("Lọc") })]));
+      bar.addEventListener("submit", function (e) { e.preventDefault(); load(); });
+      load();
+    }).catch(function (e) { toast(e.message, true); });
+
+    // read copies the inputs into the filter and redraws the controls that show it.
+    function read() {
+      evf.site = $("ev-site").value; evf.kind = $("ev-kind").value; evf.action = $("ev-action").value;
+      evf.ip = $("ev-ip").value.trim(); evf.q = $("ev-q").value.trim();
+      Array.prototype.forEach.call(bar.querySelectorAll(".seg button"), function (b) {
+        var on = b.getAttribute("data-since") === evf.since;
+        b.className = on ? "active" : ""; b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      clear(chips);
+      [["country", t("Quốc gia: {0}", evf.country)], ["rule", t("Rule: {0}", evf.rule)]].forEach(function (c) {
+        if (!evf[c[0]]) return;
+        chips.appendChild(el("span", { class: "chip" }, [c[1], el("button", { type: "button", text: "✕", title: t("Bỏ điều kiện này"), "aria-label": t("Bỏ điều kiện này"),
+          onclick: function () { evf[c[0]] = ""; load(); } })]));
+      });
+    }
+    // setFilter narrows the filter from the Top panel or an event and reloads.
+    function setFilter(key, value) {
+      if (key === "ip") $("ev-ip").value = value;
+      else if (key === "q") $("ev-q").value = value;
+      else if (key === "kind") $("ev-kind").value = value;
+      else evf[key] = value;
+      clear(detail);
+      load();
+    }
     function load() {
-      api("GET", "/api/open/events?limit=500&site_id=" + $("ev-site").value).then(function (d) {
-        clear(list); clear(detail);
+      read();
+      var my = ++seq, qs = evQuery();
+      summary.textContent = t("Đang tải…");
+      api("GET", "/api/open/events?limit=" + EV_LIMIT + (qs ? "&" + qs : "")).then(function (d) {
+        if (my !== seq) return;
+        var evs = d.data || [];
+        clear(list);
+        summary.textContent = evs.length >= EV_LIMIT ? t("Hiển thị {0} sự kiện mới nhất; dùng Xuất để tải toàn bộ.", evs.length)
+          : evs.length === 1 ? t("1 sự kiện") : t("{0} sự kiện", evs.length);
         var tb = el("tbody");
-        (d.data || []).forEach(function (e) {
+        evs.forEach(function (e) {
           var cls = e.action === "monitor" ? "warn" : e.kind === "waf" ? "bad" : "info";
-          tb.appendChild(el("tr", { class: "click", onclick: function () { showEvent(detail, e); } }, [
-            el("td", { text: fmtTime(e.time) }), el("td", { text: siteName(e.site_id) }), el("td", { class: "mono", text: e.client_ip + (e.country ? " · " + e.country : "") }),
+          tb.appendChild(el("tr", { class: "click", tabindex: "0", onclick: function () { showEvent(detail, e, setFilter); },
+            onkeydown: function (k) { if (k.key === "Enter") showEvent(detail, e, setFilter); } }, [
+            el("td", { class: "nowrap", text: fmtTime(e.time) }), el("td", { text: siteName(e.site_id) }), el("td", { class: "mono nowrap", text: e.client_ip + (e.country ? " · " + e.country : "") }),
             el("td", { class: "mono", text: e.method + " " + e.uri.slice(0, 120) }),
             el("td", {}, [el("span", { class: "pill " + cls, text: e.action === "monitor" ? t("{0} (giám sát)", e.kind) : e.kind })]),
             el("td", { text: e.feed ? t("nguồn: {0}", e.feed) : (e.tags || []).join(", ") })]));
         });
-        if (!(d.data || []).length) tb.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "muted", text: t("Chưa có sự kiện.") })]));
-        list.appendChild(el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Thời gian"), tc("col", "Ứng dụng"), t("IP"), tc("event", "Request"), t("Loại"), t("Phân loại")].map(th))]), tb])]));
-      }).catch(function (e) { toast(e.message, true); });
+        if (!evs.length) tb.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "muted", text: !qs ? t("Chưa có sự kiện.") : t("Không có sự kiện khớp bộ lọc.") })]));
+        list.appendChild(el("div", { class: "table-wrap" }, [el("table", { id: "ev-table" }, [el("thead", {}, [el("tr", {}, [t("Thời gian"), tc("col", "Ứng dụng"), t("IP"), tc("event", "Request"), t("Loại"), t("Phân loại")].map(th))]), tb])]));
+      }).catch(function (e) { if (my === seq) { summary.textContent = ""; toast(e.message, true); } });
+      loadTop(my, qs);
+    }
+    function loadTop(my, qs) {
+      clear(topBox);
+      var tabs = el("div", { class: "seg", role: "tablist", "aria-label": t("Thống kê theo") }, topOptions().map(function (o) {
+        return el("button", { type: "button", role: "tab", "aria-selected": o[0] === evTopBy ? "true" : "false", class: o[0] === evTopBy ? "active" : "", text: o[1],
+          onclick: function () { evTopBy = o[0]; loadTop(seq, evQuery()); } });
+      }));
+      var body = el("div", { class: "top-list", id: "ev-top-list" }, [el("p", { class: "muted", text: t("Đang tải…") })]);
+      topBox.appendChild(el("div", { class: "row" }, [el("b", { text: t("Top") }), el("span", { class: "spacer" }), tabs]));
+      topBox.appendChild(body);
+      var by = evTopBy;
+      api("GET", "/api/open/events/top?by=" + by + (qs ? "&" + qs : "")).then(function (d) {
+        if (my !== seq || by !== evTopBy) return;
+        clear(body);
+        var items = d.items || [];
+        if (!items.length) { body.appendChild(el("p", { class: "muted", text: t("Không có dữ liệu.") })); return; }
+        var max = items[0].count || 1;
+        var target = { ip: "ip", uri: "q", rule: "rule", country: "country", kind: "kind" }[by];
+        items.forEach(function (it) {
+          var label = by === "kind" ? optionLabel(kindOptions(), it.key) : it.label || "";
+          var bar = el("span", { class: "bar" });
+          bar.style.width = Math.max(2, Math.round(100 * it.count / max)) + "%";
+          body.appendChild(el("button", { type: "button", class: "top-row", title: t("Lọc theo {0}", it.key), onclick: function () { setFilter(target, it.key); } }, [
+            el("span", { class: "top-key" }, [el("span", { class: "mono", text: it.key }), label && label !== it.key ? el("span", { class: "muted top-label", text: label }) : null]),
+            el("b", { class: "top-count", text: String(it.count) }),
+            el("span", { class: "bar-track" }, [bar])]));
+        });
+        body.appendChild(el("p", { class: "muted small", text: t("Trong {0} sự kiện khớp bộ lọc. Bấm một dòng để lọc.", d.total) }));
+      }).catch(function (e) { if (my === seq) { clear(body); body.appendChild(el("p", { class: "err", text: e.message })); } });
     }
   }
 
-  function showEvent(box, e) {
+  function showEvent(box, e, setFilter) {
     clear(box);
     var site = state.sites.filter(function (s) { return s.id === e.site_id; })[0];
     var rules = el("tbody");
     (e.rules || []).forEach(function (r) {
       rules.appendChild(el("tr", {}, [el("td", { class: "mono nowrap", text: String(r.id) }), el("td", { text: r.msg }), el("td", { class: "mono", text: r.data || "" }), el("td", { text: r.severity && r.severity !== "unknown" ? r.severity : "" })]));
     });
+    var deny = function (siteIDs) { return api("POST", "/api/open/site/ip-deny", { ip: e.client_ip, site_ids: siteIDs }); };
     var actions = el("div", { class: "row" });
+    if (setFilter) actions.appendChild(el("button", { class: "btn small", id: "ev-filter-ip", text: t("Lọc theo IP này"), onclick: function () { setFilter("ip", e.client_ip); } }));
     if (site) {
-      actions.appendChild(el("button", { class: "btn danger small admin-only", text: t("Chặn IP {0}", e.client_ip), onclick: function () {
-        var s = JSON.parse(JSON.stringify(site)); s.ip_deny = (s.ip_deny || []).concat([e.client_ip]);
-        api("PUT", "/api/open/site", s).then(function () { toast(t("Đã thêm {0} vào denylist của {1}", e.client_ip, site.name)); loadAll(); }).catch(function (x) { toast(x.message, true); });
+      actions.appendChild(el("button", { class: "btn danger small admin-only", id: "ev-block-site", text: t("Chặn IP {0}", e.client_ip), onclick: function () {
+        deny([site.id]).then(function (r) {
+          toast(r.added.length ? t("Đã thêm {0} vào denylist của {1}", e.client_ip, site.name) : t("{0} đã có trong denylist của {1}", e.client_ip, site.name)); loadAll();
+        }).catch(function (x) { toast(x.message, true); });
       } }));
+    }
+    if (state.sites.length) actions.appendChild(el("button", { class: "btn danger small admin-only", id: "ev-block-all", text: t("Chặn IP này trên mọi ứng dụng"), onclick: function () {
+      if (!confirm(t("Chặn {0} trên tất cả {1} ứng dụng?", e.client_ip, state.sites.length))) return;
+      deny([]).then(function (r) {
+        toast(t("Đã chặn {0} trên {1} ứng dụng ({2} ứng dụng đã chặn từ trước)", r.ip, r.added.length, r.unchanged.length)); loadAll();
+      }).catch(function (x) { toast(x.message, true); });
+    } }));
+    if (site) {
       var fp = (e.rules || []).map(function (r) { return r.id; }).filter(function (id) { return id < 949000; });
-      if (fp.length) actions.appendChild(el("button", { class: "btn small admin-only", text: t("Báo chặn nhầm (tắt {0} rule)", fp.length), onclick: function () {
+      if (fp.length) actions.appendChild(el("button", { class: "btn small admin-only", id: "ev-fp", text: t("Báo chặn nhầm (tắt {0} rule)", fp.length), onclick: function () {
         if (!confirm(t("Tắt các rule {0} cho {1}?", fp.join(", "), site.name))) return;
         var s = JSON.parse(JSON.stringify(site)); s.disabled_rules = Array.from(new Set((s.disabled_rules || []).concat(fp)));
         api("PUT", "/api/open/site", s).then(function () { toast(t("Đã tắt rule cho {0}", site.name)); loadAll(); }).catch(function (x) { toast(x.message, true); });
       } }));
     }
-    box.appendChild(el("div", { class: "card" }, [
+    box.appendChild(el("div", { class: "card", id: "ev-detail" }, [
       el("div", { class: "row" }, [el("b", { text: t("Sự kiện {0}", e.id) }), el("span", { class: "spacer" }), el("button", { class: "btn ghost small", text: t("Đóng"), onclick: function () { clear(box); } })]),
       el("p", { class: "mono detail", text: e.method + " " + e.host + e.uri + "\nIP: " + e.client_ip + (e.country ? " (" + e.country + ")" : "") + "\nUser-Agent: " + (e.user_agent || "") + (e.feed ? "\n" + t("Nguồn threat intelligence: {0}", e.feed) : "") + "\nHTTP " + e.status + " · " + fmtTime(e.time) }),
       (e.rules || []).length ? el("div", { class: "table-wrap" }, [el("table", {}, [el("thead", {}, [el("tr", {}, [t("Rule"), t("Mô tả"), t("Dữ liệu khớp"), t("Mức độ")].map(th))]), rules])]) : null,

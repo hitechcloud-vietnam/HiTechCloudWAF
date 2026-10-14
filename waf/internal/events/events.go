@@ -21,8 +21,8 @@ type Event struct {
 	Method   string    `json:"method"`
 	URI      string    `json:"uri"`
 	UA       string    `json:"user_agent"`
-	// Kind is waf, rate_limit, ip_deny, ip_allow, geo, rule, bot, auth or
-	// threat_intel.
+	// Kind is waf, rate_limit, ip_deny, ip_allow, geo, rule, bot, auth,
+	// threat_intel or bad_path.
 	Kind string `json:"kind"`
 	// Action is block, monitor or (threat_intel only) challenge.
 	Action string `json:"action"`
