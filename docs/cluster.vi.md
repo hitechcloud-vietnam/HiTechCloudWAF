@@ -1,3 +1,5 @@
+English: [en/cluster.md](en/cluster.md)
+
 # HiTechCloud WAF Cluster — nhiều node + DNS
 
 ```

@@ -1,0 +1,1738 @@
+openapi: 3.1.0
+info:
+  title: HiTechCloud WAF Engine management API
+  version: 0.4.0
+  summary: Management API of a single `hcw-waf` node.
+  description: |
+    Management API of the HiTechCloud WAF engine (`hcw-waf`). It is served on
+    `api.listen` (default `https://127.0.0.1:9443`) together with the web
+    console, over HTTPS with a self-signed certificate unless `api.tls_cert`
+    is configured.
+
+    **Authentication.** Every `/api/...` route except `GET /api/open/health`,
+    `GET /api/open/brand` and `POST /api/auth/login` requires one of:
+
+    * the node API token in `X-HCW-API-TOKEN` (or `Authorization: Bearer`),
+      which always acts with the `admin` role;
+    * a console session token in `X-HCW-Session`, obtained from
+      `POST /api/auth/login`, which acts with the role of that user.
+
+    **Roles.** `admin` may call everything. `viewer` may call every `GET`
+    route except those marked `x-required-role: admin`, plus
+    `POST /api/auth/logout` and `POST /api/open/me/...`; any other request is
+    refused with `403 forbidden`. Each operation lists the minimum role in
+    `x-required-role` (`public`, `viewer` or `admin`).
+
+    **Envelope.** JSON responses are wrapped as
+    `{"data": ..., "err": null, "msg": ""}`. On failure `err` is a short
+    machine-readable code (`unauthorized`, `forbidden`, `invalid`,
+    `not_found`, `apply_failed`, ...) and `msg` the human-readable reason.
+
+    **Network ACL.** When `api.allow` is set, requests from other addresses
+    get `403 forbidden` before authentication, on every route.
+
+    **Audit.** Every non-GET request made by an authenticated caller is
+    recorded in the audit log (secrets redacted).
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+servers:
+  - url: https://127.0.0.1:9443
+    description: Default listen address (`api.listen`)
+security:
+  - apiToken: []
+  - bearerToken: []
+  - session: []
+tags:
+  - name: system
+    description: Health, node information and branding
+  - name: sites
+    description: Protected applications
+  - name: certs
+    description: TLS certificates
+  - name: monitoring
+    description: Security events, counters, metrics and upstream health
+  - name: auth
+    description: Console login sessions
+  - name: account
+    description: The calling user's own account (password, two-factor)
+  - name: users
+    description: Console user management
+  - name: admin
+    description: Audit log, backup and restore, alert test
+  - name: console
+    description: Web console
+
+paths:
+  /api/open/health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Liveness check
+      security: []
+      x-required-role: public
+      responses:
+        "200":
+          description: The node is up.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+                        const: ok
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/brand:
+    get:
+      tags: [system]
+      operationId: getBrand
+      summary: White-label brand shown by the console and block pages
+      security: []
+      x-required-role: public
+      responses:
+        "200":
+          description: Brand settings from the `brand` section of `waf.yaml`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Brand"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/info:
+    get:
+      tags: [system]
+      operationId: getInfo
+      summary: Node version and object counts
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Node information.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Info"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/site:
+    get:
+      tags: [sites]
+      operationId: listSites
+      summary: List all sites
+      x-required-role: viewer
+      responses:
+        "200":
+          description: All sites, sorted by ID.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [data, total]
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Site"
+                          total:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [sites]
+      operationId: createSite
+      summary: Create a site
+      description: |
+        `id` is ignored and assigned by the node. Defaults are filled in
+        (`ports: ["80"]`, `mode: block`, `paranoia: 1`,
+        `anomaly_threshold: 5`, ...). `custom_rules` are syntax-checked before
+        saving. The data plane is reloaded after a successful write.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Site"
+            example:
+              server_names: [shop.example.vn]
+              ports: ["80"]
+              upstreams: ["http://10.0.0.10:8080"]
+              rate_limit: {requests: 300, window_sec: 60, block_sec: 300}
+      responses:
+        "200":
+          description: The stored site.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteResponse"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+    put:
+      tags: [sites]
+      operationId: updateSite
+      summary: Replace a site
+      description: The whole site object is replaced; `id` selects the site.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Site"
+                - required: [id]
+      responses:
+        "200":
+          description: The stored site.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteResponse"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+    delete:
+      tags: [sites]
+      operationId: deleteSites
+      summary: Delete sites
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IDs"
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+
+  /api/open/cert:
+    get:
+      tags: [certs]
+      operationId: listCerts
+      summary: List all certificates
+      description: Certificates are returned with their private keys.
+      x-required-role: viewer
+      responses:
+        "200":
+          description: All certificates, sorted by ID.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [data, total]
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Cert"
+                          total:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [certs]
+      operationId: createCert
+      summary: Upload a certificate
+      description: |
+        `crt` and `key` must be a matching PEM pair. `issuer` and `not_after`
+        are read from the certificate; `domains` defaults to its DNS names.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Cert"
+      responses:
+        "200":
+          description: The stored certificate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertResponse"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+    put:
+      tags: [certs]
+      operationId: updateCert
+      summary: Replace a certificate
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Cert"
+                - required: [id]
+      responses:
+        "200":
+          description: The stored certificate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertResponse"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+    delete:
+      tags: [certs]
+      operationId: deleteCerts
+      summary: Delete certificates
+      description: A certificate still referenced by a site cannot be deleted.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IDs"
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+
+  /api/open/events:
+    get:
+      tags: [monitoring]
+      operationId: listEvents
+      summary: Latest security events, newest first
+      x-required-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Number of events (1-1000; other values mean 100).
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+        - name: site_id
+          in: query
+          description: Only events of this site (0 or absent = all sites).
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [data, total]
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Event"
+                          total:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/stats:
+    get:
+      tags: [monitoring]
+      operationId: getStats
+      summary: Per-site counters since the node started
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Object keyed by site ID.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        propertyNames:
+                          pattern: "^[0-9]+$"
+                        additionalProperties:
+                          $ref: "#/components/schemas/Counters"
+              example:
+                data:
+                  "1": {requests: 1520, blocked: 12, monitored: 0, rate_limited: 3, acl_blocked: 1, bot_failed: 0}
+                err: null
+                msg: ""
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/timeseries:
+    get:
+      tags: [monitoring]
+      operationId: getTimeseries
+      summary: Node-wide counters per minute for the last 60 minutes
+      x-required-role: viewer
+      responses:
+        "200":
+          description: 60 buckets, oldest first; empty minutes are filled with zeros.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Bucket"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/metrics:
+    get:
+      tags: [monitoring]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: |
+        Prometheus text exposition format (not wrapped in the envelope).
+        Counters per site (`site_id`, `site` labels): `hcw_requests_total`,
+        `hcw_blocked_total`, `hcw_monitored_total`, `hcw_rate_limited_total`,
+        `hcw_acl_blocked_total`, `hcw_bot_failed_total`; gauges `hcw_sites`
+        and `hcw_uptime_seconds`. Scrape with
+        `authorization: {credentials_file: ...}` (Bearer token).
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP hcw_requests_total Requests received per site.
+                # TYPE hcw_requests_total counter
+                hcw_requests_total{site_id="1",site="shop.example.vn"} 1520
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/upstreams:
+    get:
+      tags: [monitoring]
+      operationId: getUpstreams
+      summary: Health of every site's upstreams
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Object keyed by site ID; each value lists that site's upstreams.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        propertyNames:
+                          pattern: "^[0-9]+$"
+                        additionalProperties:
+                          type: array
+                          items:
+                            $ref: "#/components/schemas/UpstreamStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/audit:
+    get:
+      tags: [admin]
+      operationId: listAudit
+      summary: Latest audit log entries, newest first
+      x-required-role: admin
+      parameters:
+        - name: limit
+          in: query
+          description: Number of entries (1-2000; other values mean 200).
+          schema:
+            type: integer
+            default: 200
+            minimum: 1
+            maximum: 2000
+      responses:
+        "200":
+          description: Audit entries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [data, total]
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/AuditEntry"
+                          total:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/backup:
+    get:
+      tags: [admin]
+      operationId: getBackup
+      summary: Export the whole configuration
+      description: |
+        Returns every site and certificate (including private keys) in the
+        envelope's `data`. Save `data` to a file to restore it later with
+        `POST /api/open/restore`. The download is recorded in the audit log.
+      x-required-role: admin
+      responses:
+        "200":
+          description: The backup.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="hcw-waf-backup-YYYYMMDD-HHMMSS.json"`'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Backup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/restore:
+    post:
+      tags: [admin]
+      operationId: restoreBackup
+      summary: Replace the whole configuration with a backup
+      description: |
+        The body is the `Backup` object itself (the `data` of
+        `GET /api/open/backup`, not the envelope). Every site and certificate
+        is validated first; if any item is invalid the whole request is
+        refused and the running configuration is kept. IDs are preserved.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Backup"
+      responses:
+        "200":
+          description: Number of restored objects.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [sites, certs]
+                        properties:
+                          sites:
+                            type: integer
+                          certs:
+                            type: integer
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ApplyFailed"
+
+  /api/open/alerts/test:
+    post:
+      tags: [admin]
+      operationId: sendTestAlert
+      summary: Send a test notification to every configured alert channel
+      x-required-role: admin
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+                        const: sent
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: "`not_configured`: no alert channel (Telegram or webhook) is configured."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: "`delivery_failed`: a channel could not be reached."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in with a console account
+      description: |
+        Returns a session token to send in `X-HCW-Session`. Sessions last 12
+        hours. When the account has two-factor enabled and `otp` is missing,
+        the answer is `401` with `err: otp_required` (not counted as a failed
+        login). 10 failed logins in 15 minutes lock the client address.
+      security: []
+      x-required-role: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                otp:
+                  type: string
+                  description: 6-digit TOTP code, when two-factor is enabled.
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/LoginResult"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          description: "`unauthorized` (wrong credentials or code) or `otp_required`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "`not_found`: user accounts are not enabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: "`locked`: too many failed logins from this address."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: End the session sent in X-HCW-Session
+      x-required-role: viewer
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/me:
+    get:
+      tags: [account]
+      operationId: getMe
+      summary: The authenticated caller
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Caller identity.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/me/password:
+    post:
+      tags: [account]
+      operationId: changeMyPassword
+      summary: Change the caller's password
+      description: Needs a session (the API token has no account). Other sessions of the user are ended.
+      x-required-role: viewer
+      security:
+        - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current, new]
+              properties:
+                current:
+                  type: string
+                  format: password
+                new:
+                  type: string
+                  format: password
+                  minLength: 10
+                  maxLength: 72
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/NoAccountOrInvalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/me/totp/setup:
+    post:
+      tags: [account]
+      operationId: beginTOTP
+      summary: Start two-factor enrolment
+      description: |
+        Generates a pending TOTP secret. Show `qr` (or `url`) to an
+        authenticator app, then confirm with `POST /api/open/me/totp/enable`.
+      x-required-role: viewer
+      security:
+        - session: []
+      responses:
+        "200":
+          description: Pending secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/TOTPSetup"
+        "400":
+          $ref: "#/components/responses/NoAccountOrInvalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: "`qr`: the QR code could not be rendered."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/open/me/totp/enable:
+    post:
+      tags: [account]
+      operationId: enableTOTP
+      summary: Confirm enrolment with a code from the app
+      x-required-role: viewer
+      security:
+        - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPCode"
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/NoAccountOrInvalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/me/totp/disable:
+    post:
+      tags: [account]
+      operationId: disableTOTP
+      summary: Turn two-factor off (needs a current code)
+      x-required-role: viewer
+      security:
+        - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TOTPCode"
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/NoAccountOrInvalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/open/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List console users
+      description: Secrets (password hashes, TOTP secrets) are never returned.
+      x-required-role: viewer
+      responses:
+        "200":
+          description: Users (empty when accounts are not enabled).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [data, total]
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PublicUser"
+                          total:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a user
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, role]
+              properties:
+                username:
+                  type: string
+                  pattern: "^[a-zA-Z0-9._@-]{3,64}$"
+                password:
+                  type: string
+                  format: password
+                  minLength: 10
+                  maxLength: 72
+                role:
+                  $ref: "#/components/schemas/Role"
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AccountsDisabled"
+    put:
+      tags: [users]
+      operationId: updateUser
+      summary: Change a user's password and/or role, or reset two-factor
+      description: |
+        Empty `password` / `role` keep the current value. Any change ends the
+        user's open sessions. The last admin cannot be demoted.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                  description: New password (10-72 characters), or empty.
+                role:
+                  description: New role, or empty.
+                  anyOf:
+                    - $ref: "#/components/schemas/Role"
+                    - type: string
+                      const: ""
+                reset_totp:
+                  type: boolean
+                  description: Remove two-factor so the user can enrol again.
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AccountsDisabled"
+    delete:
+      tags: [users]
+      operationId: deleteUsers
+      summary: Delete users
+      description: Callers cannot delete their own account; the last admin cannot be deleted.
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [usernames]
+              properties:
+                usernames:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/OKNull"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AccountsDisabled"
+
+  /:
+    get:
+      tags: [console]
+      operationId: getConsole
+      summary: Web console (and its static files below /)
+      description: |
+        Served only when the console is enabled. Any `GET` path outside
+        `/api/` is handled by the console and needs no token; the console
+        itself authenticates against the API.
+      security: []
+      x-required-role: public
+      responses:
+        "200":
+          description: Console page or static asset.
+          content:
+            text/html:
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    apiToken:
+      type: apiKey
+      in: header
+      name: X-HCW-API-TOKEN
+      description: Node API token (`api.token` in `waf.yaml`, e.g. `/etc/hcw-waf/api.token`). Acts as `admin`.
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: "The node API token sent as `Authorization: Bearer <token>`. Acts as `admin`."
+    session:
+      type: apiKey
+      in: header
+      name: X-HCW-Session
+      description: Console session token from `POST /api/auth/login`. Acts with the user's role.
+
+  responses:
+    OKNull:
+      description: Done.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    type: "null"
+    Unauthorized:
+      description: "`unauthorized`: missing or invalid API token or session."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: |
+        `forbidden`: the caller's role may not do this (`viewer` writing, or
+        an admin-only route), or the client address is outside `api.allow`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Invalid:
+      description: "`invalid`: malformed JSON or a validation error (see `msg`)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoAccountOrInvalid:
+      description: |
+        `no_account` when called with the API token (it has no user
+        account), or `invalid` (wrong password/code, malformed body).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: "`not_found`: no object with this `id`."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AccountsDisabled:
+      description: "User accounts are not enabled (`not_found`), or the user does not exist (`invalid`)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ApplyFailed:
+      description: "`apply_failed`: the change was stored but the data plane could not load it."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Envelope:
+      type: object
+      required: [data, err, msg]
+      properties:
+        data:
+          description: The result; `null` on error.
+        err:
+          type: [string, "null"]
+          description: Error code, `null` on success.
+        msg:
+          type: string
+          description: Error message, empty on success.
+
+    Error:
+      type: object
+      required: [data, err, msg]
+      properties:
+        data:
+          type: "null"
+        err:
+          type: string
+          enum: [unauthorized, forbidden, invalid, not_found, apply_failed, locked,
+                 otp_required, no_account, not_configured, delivery_failed, qr]
+        msg:
+          type: string
+      example:
+        data: null
+        err: unauthorized
+        msg: missing or invalid API token or session
+
+    IDs:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items:
+            type: integer
+      example:
+        ids: [1, 2]
+
+    Brand:
+      type: object
+      properties:
+        name:
+          type: string
+        color:
+          type: string
+          description: CSS colour, e.g. `#1D4ED8`.
+        support_url:
+          type: string
+
+    Info:
+      type: object
+      required: [version, started_at, sites, certs]
+      properties:
+        version:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        sites:
+          type: integer
+        certs:
+          type: integer
+
+    RateLimit:
+      type: object
+      description: "Per client IP. `requests: 0` disables it."
+      properties:
+        requests:
+          type: integer
+          minimum: 0
+          description: Requests allowed per `window_sec`.
+        window_sec:
+          type: integer
+          minimum: 0
+          description: Window length (default 60 when `requests` > 0).
+        block_sec:
+          type: integer
+          minimum: 0
+          description: How long a client stays blocked after exceeding the limit.
+
+    BotChallenge:
+      type: object
+      description: JavaScript proof-of-work challenge.
+      properties:
+        enabled:
+          type: boolean
+        ttl_sec:
+          type: integer
+          minimum: 60
+          maximum: 2592000
+          default: 3600
+          description: How long a solved challenge stays valid.
+        difficulty:
+          type: integer
+          minimum: 8
+          maximum: 24
+          default: 16
+          description: Leading zero bits of SHA-256.
+        exclude_paths:
+          type: array
+          description: Path prefixes served without a challenge (APIs, webhooks).
+          items:
+            type: string
+            pattern: "^/"
+
+    AuthChallenge:
+      type: object
+      description: Shared-password protection.
+      properties:
+        enabled:
+          type: boolean
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 8
+          maxLength: 72
+          description: Write-only; hashed into `password_hash` on save.
+        password_hash:
+          type: string
+          description: bcrypt hash.
+        ttl_sec:
+          type: integer
+          minimum: 60
+          maximum: 2592000
+          default: 28800
+        exclude_paths:
+          type: array
+          items:
+            type: string
+            pattern: "^/"
+
+    DynamicProtection:
+      type: object
+      description: Re-encode HTML pages and JavaScript files on every response.
+      properties:
+        html:
+          type: boolean
+        js:
+          type: boolean
+        paths:
+          type: array
+          description: Limit protection to these path prefixes (empty = whole site).
+          items:
+            type: string
+            pattern: "^/"
+
+    HealthCheck:
+      type: object
+      description: Active upstream probing. Empty `path` disables it.
+      properties:
+        path:
+          type: string
+          description: Path to request, e.g. `/healthz`.
+        interval_sec:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 10
+        timeout_sec:
+          type: integer
+          minimum: 1
+          maximum: 60
+          default: 3
+        unhealthy:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 3
+          description: Consecutive failures that take an upstream out.
+        healthy:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 2
+          description: Consecutive successes that bring it back.
+
+    PathRule:
+      type: object
+      required: [path, action]
+      description: Evaluated in order; `allow` and `deny` stop the evaluation.
+      properties:
+        path:
+          type: string
+          pattern: "^/"
+        exact:
+          type: boolean
+          description: Match the whole path instead of a prefix.
+        methods:
+          type: array
+          description: HTTP methods (empty = all).
+          items:
+            type: string
+        ips:
+          type: array
+          description: Client IPs or CIDRs (empty = everyone).
+          items:
+            type: string
+        action:
+          type: string
+          enum: [allow, deny, skip_waf, rate_limit]
+        rate_limit:
+          $ref: "#/components/schemas/RateLimit"
+        comment:
+          type: string
+
+    Site:
+      type: object
+      description: One protected application.
+      required: [server_names, upstreams]
+      properties:
+        id:
+          type: integer
+          description: Assigned by the node on create; required on update.
+        name:
+          type: string
+          description: Defaults to the first server name.
+        server_names:
+          type: array
+          minItems: 1
+          description: Host names, `*.domain` wildcards, or `_` (catch-all).
+          items:
+            type: string
+        ports:
+          type: array
+          description: '`"80"`, `"8080"`, `"443_ssl"`. Defaults to `["80"]`. An `_ssl` port needs `cert_id` or `auto_tls`.'
+          items:
+            type: string
+            pattern: "^[0-9]{1,5}(_ssl)?$"
+        upstreams:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            description: "`http(s)://host[:port]`"
+        cert_id:
+          type: integer
+        mode:
+          type: string
+          enum: [block, monitor, "off"]
+          default: block
+        paranoia:
+          type: integer
+          minimum: 1
+          maximum: 4
+          default: 1
+          description: OWASP CRS paranoia level.
+        anomaly_threshold:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 5
+          description: CRS inbound anomaly score that blocks.
+        disabled_rules:
+          type: array
+          description: CRS rule IDs removed for this site (false positives).
+          items:
+            type: integer
+            minimum: 900000
+            maximum: 999999
+        rate_limit:
+          $ref: "#/components/schemas/RateLimit"
+        bot_challenge:
+          $ref: "#/components/schemas/BotChallenge"
+        dynamic_protection:
+          $ref: "#/components/schemas/DynamicProtection"
+        rules:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/PathRule"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        auth:
+          $ref: "#/components/schemas/AuthChallenge"
+        ip_allow:
+          type: array
+          description: When non-empty, only these IPs/CIDRs are admitted.
+          items:
+            type: string
+        ip_deny:
+          type: array
+          description: Always blocked IPs/CIDRs.
+          items:
+            type: string
+        country_allow:
+          type: array
+          description: ISO 3166-1 alpha-2 codes; when non-empty, only these are admitted. Needs `geoip_db`.
+          items:
+            type: string
+            pattern: "^[A-Za-z]{2}$"
+        country_deny:
+          type: array
+          items:
+            type: string
+            pattern: "^[A-Za-z]{2}$"
+        upstream_host:
+          type: string
+          description: Host header sent upstream (empty = keep the client's).
+        upstream_insecure:
+          type: boolean
+          description: Skip certificate checks of https upstreams.
+        redirect_https:
+          type: boolean
+        auto_tls:
+          type: boolean
+          description: Obtain and renew certificates via ACME (needs `acme.enabled`). No wildcards or `_`.
+        hsts:
+          type: boolean
+        custom_rules:
+          type: string
+          maxLength: 65536
+          description: Extra SecLang rules (IDs 1-99999, no `Include` or file operators).
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    SiteResponse:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Site"
+
+    Cert:
+      type: object
+      description: A TLS certificate and key in PEM.
+      required: [crt, key]
+      properties:
+        id:
+          type: integer
+          description: Assigned by the node on create; required on update.
+        domains:
+          type: array
+          description: Defaults to the certificate's DNS names (or common name).
+          items:
+            type: string
+        crt:
+          type: string
+          description: PEM certificate (chain).
+        key:
+          type: string
+          description: PEM private key.
+        issuer:
+          type: string
+          readOnly: true
+        not_after:
+          type: string
+          format: date-time
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    CertResponse:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Cert"
+
+    MatchedRule:
+      type: object
+      required: [id, msg]
+      properties:
+        id:
+          type: integer
+        msg:
+          type: string
+        data:
+          type: string
+        severity:
+          type: string
+
+    Event:
+      type: object
+      description: One security decision.
+      required: [id, time, site_id, host, client_ip, method, uri, user_agent, kind, action, status]
+      properties:
+        id:
+          type: string
+          description: Event ID shown on the block page.
+        time:
+          type: string
+          format: date-time
+        site_id:
+          type: integer
+        host:
+          type: string
+        client_ip:
+          type: string
+        country:
+          type: string
+        method:
+          type: string
+        uri:
+          type: string
+        user_agent:
+          type: string
+        kind:
+          type: string
+          description: "What decided: `waf`, `rule` (path rule deny), `rate_limit`, `ip_deny`, `ip_allow`, `geo`, `bot` or `auth`."
+        action:
+          type: string
+          description: "`block` or `monitor`."
+        status:
+          type: integer
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchedRule"
+        tags:
+          type: array
+          items:
+            type: string
+
+    Counters:
+      type: object
+      properties:
+        requests:
+          type: integer
+        blocked:
+          type: integer
+        monitored:
+          type: integer
+        rate_limited:
+          type: integer
+        acl_blocked:
+          type: integer
+        bot_failed:
+          type: integer
+
+    Bucket:
+      type: object
+      properties:
+        minute:
+          type: integer
+          description: Unix seconds, start of the minute.
+        requests:
+          type: integer
+        blocked:
+          type: integer
+        monitored:
+          type: integer
+        rate_limited:
+          type: integer
+        acl_blocked:
+          type: integer
+        bot_failed:
+          type: integer
+
+    UpstreamStatus:
+      type: object
+      required: [url, healthy, checked]
+      properties:
+        url:
+          type: string
+        healthy:
+          type: boolean
+        checked:
+          type: boolean
+          description: Whether an active health check has run.
+        last_check:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+
+    AuditEntry:
+      type: object
+      required: [time, user, ip, action, status]
+      properties:
+        time:
+          type: string
+          format: date-time
+        user:
+          type: string
+          description: Username, or `api-token`.
+        ip:
+          type: string
+        action:
+          type: string
+          description: e.g. `PUT /api/open/site` or `login`.
+        status:
+          type: integer
+          description: HTTP status of the request.
+        detail:
+          description: Request body with passwords, keys, tokens and codes replaced by `***`.
+
+    Backup:
+      type: object
+      required: [version, sites, certs]
+      properties:
+        version:
+          type: integer
+          const: 1
+        exported_at:
+          type: string
+          format: date-time
+        sites:
+          type: array
+          items:
+            $ref: "#/components/schemas/Site"
+        certs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cert"
+
+    Role:
+      type: string
+      enum: [admin, viewer]
+
+    LoginResult:
+      type: object
+      required: [token, username, role, expires]
+      properties:
+        token:
+          type: string
+          description: Send in `X-HCW-Session`.
+        username:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        expires:
+          type: string
+          format: date-time
+
+    Me:
+      type: object
+      required: [username, role, account, accounts_enabled]
+      properties:
+        username:
+          type: string
+          description: Username, or `api-token`.
+        role:
+          $ref: "#/components/schemas/Role"
+        account:
+          type: boolean
+          description: "`false` when authenticated with the API token."
+        accounts_enabled:
+          type: boolean
+        totp:
+          type: boolean
+          description: Two-factor enabled (console accounts only).
+
+    TOTPSetup:
+      type: object
+      required: [secret, url, qr]
+      properties:
+        secret:
+          type: string
+          description: Base32 secret.
+        url:
+          type: string
+          description: "`otpauth://` URL."
+        qr:
+          type: string
+          description: "`data:image/png;base64,...` QR code of `url`."
+
+    TOTPCode:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: 6-digit code from the authenticator app.
+
+    PublicUser:
+      type: object
+      required: [username, role, totp, created_at]
+      properties:
+        username:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        totp:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time

@@ -1,0 +1,729 @@
+openapi: 3.1.0
+info:
+  title: HiTechCloud WAF Cluster controller API
+  version: 0.4.0
+  summary: HTTP API of `hcw controller`.
+  description: |
+    API of the cluster controller (`hcw controller`, default listen `:7443`,
+    HTTPS when `tls_cert` is configured). It is used by three kinds of
+    clients, each with its own bearer token (all sent as
+    `Authorization: Bearer <token>`):
+
+    * **admin** (`admin.token`): operators and the dashboard;
+    * **node** (`node.token`): `hcw agent` on every WAF node;
+    * **dns** (`dns.token`): `hcw dns` servers (the admin token is accepted
+      too on the DNS endpoint).
+
+    Each operation lists the accepted token in `x-required-token`.
+
+    Unlike the engine API, responses are **not** wrapped in an envelope:
+    successful answers are plain JSON, errors are `text/plain` messages
+    (`unauthorized`, `404 page not found`, validation errors, ...). A missing
+    or wrong token gets `401` with
+    `WWW-Authenticate: Bearer realm="hitechcloud-waf-cluster"`.
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+servers:
+  - url: https://ctl.waf.example.vn:7443
+    description: Example controller address
+tags:
+  - name: public
+    description: Liveness, branding and dashboard
+  - name: agent
+    description: Called by node agents
+  - name: nodes
+    description: Node registry (admin)
+  - name: pools
+    description: Pools and DNS endpoints
+  - name: events
+    description: Cluster-wide security events
+  - name: sync
+    description: Configuration replication from the primary engine
+
+paths:
+  /:
+    get:
+      tags: [public]
+      operationId: getDashboard
+      summary: Web dashboard
+      description: |
+        Exactly `/` (other unknown paths are `404`). The page itself is public;
+        it asks for the admin token and calls the admin API with it.
+      security: []
+      x-required-token: none
+      responses:
+        "200":
+          description: Dashboard HTML.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /healthz:
+    get:
+      tags: [public]
+      operationId: getHealthz
+      summary: Liveness check
+      security: []
+      x-required-token: none
+      responses:
+        "200":
+          description: "`ok`"
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: "ok\n"
+
+  /v1/brand:
+    get:
+      tags: [public]
+      operationId: getBrand
+      summary: White-label brand of the dashboard
+      security: []
+      x-required-token: none
+      responses:
+        "200":
+          description: The `brand` section of `controller.yaml`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Brand"
+
+  /v1/heartbeat:
+    post:
+      tags: [agent]
+      operationId: postHeartbeat
+      summary: Report node status (and new security events)
+      description: |
+        Registers the node on first contact and updates it afterwards. At
+        most 200 events per heartbeat are kept; events are held in memory
+        only (the newest 5000 cluster-wide). `probe_url`, when set, must
+        point at the node's own `ipv4` or `ipv6` address.
+      security:
+        - nodeToken: []
+      x-required-token: node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Heartbeat"
+      responses:
+        "200":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [node, config_revision]
+                properties:
+                  node:
+                    type: string
+                    description: The node ID.
+                  config_revision:
+                    type: string
+                    description: Revision of the current configuration snapshot (empty when none).
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/config/snapshot:
+    get:
+      tags: [agent]
+      operationId: getSnapshot
+      summary: Current configuration snapshot from the primary engine
+      security:
+        - nodeToken: []
+      x-required-token: node
+      responses:
+        "200":
+          description: Snapshot and the resource definitions needed to apply it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: No snapshot yet; `error` says why (replication disabled, primary unreachable, ...).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotResponse"
+
+  /v1/nodes:
+    get:
+      tags: [nodes]
+      operationId: listNodes
+      summary: All registered nodes, sorted by ID
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: Nodes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Node"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/nodes/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+    get:
+      tags: [nodes]
+      operationId: getNode
+      summary: One node
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: The node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [nodes]
+      operationId: patchNode
+      summary: Drain a node or override its weight
+      description: "Omitted fields are unchanged. `weight_override: 0` clears the override."
+      security:
+        - adminToken: []
+      x-required-token: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NodePatch"
+            examples:
+              drain:
+                value: {drain: true}
+              weight:
+                value: {weight_override: 50}
+      responses:
+        "200":
+          description: The updated node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [nodes]
+      operationId: deleteNode
+      summary: Remove a node from the registry
+      description: A node that keeps sending heartbeats registers again.
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          description: The state file could not be written.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/pools:
+    get:
+      tags: [pools]
+      operationId: listPools
+      summary: Every pool with its endpoints
+      description: Nodes without pools belong to `default`. Drained nodes are left out of the endpoints.
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: Pools sorted by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PoolEndpoints"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/pools/{pool}/endpoints:
+    get:
+      tags: [pools]
+      operationId: getPoolEndpoints
+      summary: Endpoints of one pool (used by the DNS servers)
+      description: "Drained nodes are left out; unhealthy ones are listed with `healthy: false`."
+      security:
+        - dnsToken: []
+        - adminToken: []
+      x-required-token: dns or admin
+      parameters:
+        - name: pool
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Endpoints (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoolEndpoints"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Security events reported by all nodes, newest first
+      security:
+        - adminToken: []
+      x-required-token: admin
+      parameters:
+        - name: limit
+          in: query
+          description: Number of events (1-1000; other values mean 200).
+          schema:
+            type: integer
+            default: 200
+            minimum: 1
+            maximum: 1000
+        - name: node
+          in: query
+          description: Only events from this node ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/sync:
+    get:
+      tags: [sync]
+      operationId: getSyncStatus
+      summary: Replication status
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "200":
+          description: Status. `revision`, `created_at` and `counts` are present once a snapshot exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [sync]
+      operationId: triggerSync
+      summary: Rebuild the snapshot from the primary now
+      security:
+        - adminToken: []
+      x-required-token: admin
+      responses:
+        "202":
+          description: A refresh was scheduled.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Replication is disabled (`controller.primary.base_url` is empty).
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: Admin token (`/etc/hcw/secrets/admin.token`).
+    nodeToken:
+      type: http
+      scheme: bearer
+      description: Node token shared by agents (`/etc/hcw/secrets/node.token`).
+    dnsToken:
+      type: http
+      scheme: bearer
+      description: DNS token (`/etc/hcw/secrets/dns.token`).
+
+  responses:
+    Unauthorized:
+      description: Missing or wrong token.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer realm="hitechcloud-waf-cluster"
+      content:
+        text/plain:
+          schema:
+            type: string
+            const: "unauthorized\n"
+    BadRequest:
+      description: Invalid JSON or a validation error (plain-text message).
+      content:
+        text/plain:
+          schema:
+            type: string
+    NotFound:
+      description: Unknown node.
+      content:
+        text/plain:
+          schema:
+            type: string
+
+  schemas:
+    Brand:
+      type: object
+      description: Field names are capitalised (the type has no JSON tags).
+      properties:
+        Name:
+          type: string
+        PrimaryColor:
+          type: string
+        LogoURL:
+          type: string
+        SupportURL:
+          type: string
+
+    Stats:
+      type: object
+      description: Point-in-time host metrics.
+      properties:
+        load1:
+          type: number
+        load5:
+          type: number
+        load15:
+          type: number
+        cpus:
+          type: integer
+        mem_total_mb:
+          type: integer
+        mem_avail_mb:
+          type: integer
+        uptime_sec:
+          type: integer
+        disk_free_mb:
+          type: integer
+        disk_total_mb:
+          type: integer
+
+    Traffic:
+      type: object
+      description: Request counters of the local engine since its start, summed over sites.
+      properties:
+        requests:
+          type: integer
+        blocked:
+          type: integer
+        monitored:
+          type: integer
+        rate_limited:
+          type: integer
+        acl_blocked:
+          type: integer
+        bot_failed:
+          type: integer
+
+    Event:
+      type: object
+      description: A security event reported by a node (subset of the engine's event).
+      required: [id, time, host, client_ip, method, uri, kind, action, status]
+      properties:
+        id:
+          type: string
+        node:
+          type: string
+          description: Set by the controller to the reporting node's ID.
+        time:
+          type: string
+          format: date-time
+        host:
+          type: string
+        client_ip:
+          type: string
+        country:
+          type: string
+        method:
+          type: string
+        uri:
+          type: string
+          maxLength: 512
+        kind:
+          type: string
+        action:
+          type: string
+        status:
+          type: integer
+        tags:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+
+    HeartbeatFields:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+        name:
+          type: string
+          description: Defaults to `id`.
+        region:
+          type: string
+        pools:
+          type: array
+          description: Pool names (empty = `default`).
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+        ipv4:
+          type: string
+          format: ipv4
+        ipv6:
+          type: string
+          format: ipv6
+        weight:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: DNS weight (0 = 100).
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        version:
+          type: string
+        probe_url:
+          type: string
+          description: http(s) URL the controller probes; its host must be the node's own address. Empty = trust heartbeats only.
+        engine_healthy:
+          type: boolean
+        engine_error:
+          type: string
+        config_revision:
+          type: string
+          description: Snapshot revision applied by the agent.
+        config_error:
+          type: string
+        stats:
+          $ref: "#/components/schemas/Stats"
+        traffic:
+          $ref: "#/components/schemas/Traffic"
+
+    Heartbeat:
+      allOf:
+        - $ref: "#/components/schemas/HeartbeatFields"
+        - type: object
+          required: [id, ipv4]
+          properties:
+            events:
+              type: array
+              description: Security events since the previous heartbeat, newest first.
+              items:
+                $ref: "#/components/schemas/Event"
+
+    Node:
+      description: The controller's view of a cluster member (the last heartbeat plus derived state).
+      allOf:
+        - $ref: "#/components/schemas/HeartbeatFields"
+        - type: object
+          properties:
+            first_seen:
+              type: string
+              format: date-time
+            last_seen:
+              type: string
+              format: date-time
+            drain:
+              type: boolean
+              description: Left out of DNS answers (maintenance).
+            weight_override:
+              type: integer
+              description: When > 0, replaces the reported weight.
+            probe_ok:
+              type: boolean
+            probe_error:
+              type: string
+            probe_at:
+              type: string
+              format: date-time
+            probe_ms:
+              type: integer
+            healthy:
+              type: boolean
+              description: Fresh heartbeat, engine healthy and probe passing.
+            reason:
+              type: string
+              description: Why the node is unhealthy.
+
+    NodePatch:
+      type: object
+      properties:
+        drain:
+          type: boolean
+        weight_override:
+          type: integer
+          minimum: 0
+
+    Endpoint:
+      type: object
+      required: [node_id, name, region, weight, healthy]
+      properties:
+        node_id:
+          type: string
+        name:
+          type: string
+        region:
+          type: string
+        ipv4:
+          type: string
+        ipv6:
+          type: string
+        weight:
+          type: integer
+          description: Effective weight.
+        healthy:
+          type: boolean
+
+    PoolEndpoints:
+      type: object
+      required: [pool, endpoints]
+      properties:
+        pool:
+          type: string
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Endpoint"
+
+    Snapshot:
+      type: object
+      required: [revision, created_at, resources]
+      properties:
+        revision:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        resources:
+          type: object
+          description: Items of each replicated resource, keyed by resource name, as returned by the primary engine.
+          additionalProperties:
+            type: array
+            items: {}
+
+    Resource:
+      type: object
+      description: |
+        A replicated collection, from `controller.primary.resources`. Field
+        names are capitalised (the type has no JSON tags).
+      properties:
+        Name:
+          type: string
+        Path:
+          type: string
+          description: Collection path on the engine, e.g. `/api/open/site`.
+        ListQuery:
+          type: string
+        ItemsPath:
+          type: string
+          description: Dotted path of the item array in the list response, e.g. `data.data`.
+        IDField:
+          type: string
+        KeyFields:
+          type: [array, "null"]
+          items:
+            type: string
+        IgnoreFields:
+          type: [array, "null"]
+          items:
+            type: string
+        Refs:
+          type: [object, "null"]
+          additionalProperties:
+            type: string
+        UpdateMethod:
+          type: string
+        DeleteMode:
+          type: string
+          enum: [body_ids, path]
+        Prune:
+          type: boolean
+
+    SnapshotResponse:
+      type: object
+      properties:
+        snapshot:
+          oneOf:
+            - $ref: "#/components/schemas/Snapshot"
+            - type: "null"
+        resources:
+          type: [array, "null"]
+          items:
+            $ref: "#/components/schemas/Resource"
+        error:
+          type: string
+
+    SyncStatus:
+      type: object
+      required: [enabled, error]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether a primary engine is configured.
+        error:
+          type: string
+          description: Last snapshot error (empty when the last refresh succeeded).
+        revision:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        counts:
+          type: object
+          description: Number of items per resource in the snapshot.
+          additionalProperties:
+            type: integer
