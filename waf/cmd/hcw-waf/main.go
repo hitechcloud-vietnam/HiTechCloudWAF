@@ -39,6 +39,7 @@ import (
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/mgmt"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/proxy"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/store"
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/threatintel"
 	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/users"
 )
 
@@ -120,7 +121,13 @@ func run(path string, log *slog.Logger) error {
 		defer al.Close()
 		access = al
 	}
+	ti, err := threatintel.New(cfg.ThreatIntel, filepath.Join(cfg.DataDir, "threatintel"), log)
+	if err != nil {
+		return fmt.Errorf("threat_intel: %w", err)
+	}
+	go ti.Run(ctx)
 	eng := proxy.New(ctx, proxy.Options{
+		ThreatIntel: ti, GoodBots: threatintel.NewBotVerifier(nil),
 		Access: access,
 		GeoIP:  geoIface,
 		Bind:   cfg.Bind, BodyLimit: cfg.BodyLimitKB * 1024, TrustedProxies: cfg.TrustedNets,
@@ -162,7 +169,7 @@ func run(path string, log *slog.Logger) error {
 	}
 	api := &mgmt.API{Token: cfg.API.Token, Store: st, Events: evlog, Apply: eng.Apply, Log: log,
 		Brand: cfg.Brand, Version: version, Started: start, Console: console.Handler(), Allow: cfg.APIAllow,
-		Upstreams: func() any { return eng.UpstreamStatus() }}
+		Upstreams: func() any { return eng.UpstreamStatus() }, ThreatIntel: func() any { return ti.Status() }}
 	if alertSender != nil {
 		api.Alerts = alertSender
 	}

@@ -40,7 +40,7 @@ acme:
 # site and kind; at most one message per interval.
 # node_name: hn-01
 # alerts:
-#   kinds: [waf, geo, rate_limit, bot, auth]
+#   kinds: [waf, geo, rate_limit, bot, auth, threat_intel]
 #   interval: 5m
 #   include_monitor: false
 #   telegram:
@@ -49,3 +49,23 @@ acme:
 #   webhooks:
 #     - url: https://hooks.example.vn/waf
 #       secret: change-me                            # X-HCW-Signature: sha256=HMAC(body)
+
+# Threat intelligence: IP/CIDR lists downloaded in the background (plain
+# text, "#"/";" comments: FireHOL .netset/.ipset, Spamhaus DROP, ...). A copy
+# is kept in <data_dir>/threatintel so lists work at start-up while offline;
+# on a failed download the previous list stays in use. Sites opt in with
+# "threat_intel": "block" | "challenge" | "monitor" (default "off").
+# Private, loopback, link-local and CGNAT addresses are never matched.
+# threat_intel:
+#   timeout: 60s              # per download
+#   max_size_mb: 32           # larger lists are refused
+#   feeds:
+#     - name: firehol_level1
+#       url: https://iplists.firehol.org/files/firehol_level1.netset
+#       refresh: 1h
+#     - name: spamhaus_drop
+#       url: https://www.spamhaus.org/drop/drop.txt
+#       refresh: 12h
+#     - name: local
+#       url: file:///etc/hcw-waf/blocklist.txt
+#       refresh: 5m

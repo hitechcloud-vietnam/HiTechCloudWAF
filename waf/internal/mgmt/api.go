@@ -46,6 +46,8 @@ type API struct {
 	Allow []*net.IPNet
 	// Upstreams reports upstream health (optional).
 	Upstreams func() any
+	// ThreatIntel reports the threat-intelligence feeds (optional).
+	ThreatIntel func() any
 	// Audit records administrative actions (optional).
 	Audit *audit.Log
 	// Users enables console accounts; nil means API token only.
@@ -179,6 +181,13 @@ func (a *API) Handler() http.Handler {
 			return
 		}
 		ok(w, a.Upstreams())
+	})
+	mux.HandleFunc("GET /api/open/threatintel", func(w http.ResponseWriter, _ *http.Request) {
+		var feeds any = []any{}
+		if a.ThreatIntel != nil {
+			feeds = a.ThreatIntel()
+		}
+		ok(w, map[string]any{"feeds": feeds})
 	})
 	mux.HandleFunc("GET /api/open/audit", func(w http.ResponseWriter, r *http.Request) {
 		if !adminOnly(w, r) {

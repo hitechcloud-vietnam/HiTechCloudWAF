@@ -12,9 +12,11 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ redirect HTTPS (tuỳ chọn)
           ├─ ACL IP: ip_deny → 403, ip_allow (nếu có) → 403
           ├─ Rule theo đường dẫn (allow / deny / skip_waf / rate_limit)
+          ├─ Threat intelligence: IP thuộc danh sách đe dọa → 403 / challenge / log
           ├─ Rate limit theo IP/site → 429 + thời gian chặn
           ├─ Auth challenge (mật khẩu) → trang đăng nhập
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
+          │   (bot tìm kiếm đã xác minh bằng DNS được bỏ qua nếu bật allow_verified)
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
           ├─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
@@ -40,6 +42,7 @@ Mỗi lần chặn sinh một sự kiện, lưu trong bộ nhớ và ghi vào fi
 | `auto_tls` | Tự cấp và gia hạn chứng chỉ Let's Encrypt (cần `acme.enabled`) |
 | `hsts` | Thêm `Strict-Transport-Security` vào các response HTTPS |
 | `country_allow` / `country_deny` | Mã quốc gia ISO, ví dụ `VN`. Cần `geoip_db` trên node |
+| `threat_intel` | `off` (mặc định), `block`, `challenge`, `monitor`: xử lý IP nằm trong danh sách đe dọa (xem bên dưới) |
 | `dynamic_protection` | Mã hoá HTML/JS mỗi response, chống thu thập dữ liệu (xem bên dưới) |
 | `rules` | Rule theo đường dẫn (xem bên dưới) |
 | `health_check` | `{path, interval_sec, timeout_sec, unhealthy, healthy}`: kiểm tra upstream chủ động |
@@ -81,6 +84,30 @@ dùng được trong 5 phút, đúng site, đúng IP.
 
 Dùng `exclude_paths` cho API, webhook và app mobile, vì các client này không
 chạy được JS.
+
+#### Bot tìm kiếm đã xác minh (`allow_verified`)
+
+`{"enabled": true, "allow_verified": true}`
+
+Crawler của công cụ tìm kiếm không chạy được JS nên sẽ kẹt ở trang challenge,
+ảnh hưởng SEO. Khi bật `allow_verified`, request có User-Agent của Googlebot,
+Bingbot, Applebot, YandexBot, Baiduspider, Yahoo Slurp hoặc coccocbot được
+kiểm tra bằng **reverse DNS + forward-confirm**:
+
+1. Tra PTR của IP, ví dụ `crawl-66-249-66-1.googlebot.com`.
+2. Tên miền phải thuộc miền chính thức của bot (`googlebot.com`, `google.com`,
+   `search.msn.com`, `applebot.apple.com`, `yandex.ru/.net/.com`,
+   `baidu.com/.jp`, `crawl.yahoo.net`, `coccoc.com`).
+3. Phân giải xuôi tên đó phải ra đúng IP ban đầu. Bước này chặn được kẻ tự đặt
+   PTR giả cho IP của mình.
+
+Bot đạt cả ba bước được bỏ qua anti-bot challenge (kể cả challenge do
+threat intelligence), **nhưng vẫn qua bộ lọc WAF**, rate limit và ACL. Bot giả
+mạo User-Agent bị xử lý như khách bình thường. Kết quả được cache 6 giờ (lỗi
+DNS tạm thời chỉ cache 1 phút), cache giới hạn 20.000 mục, mỗi lần tra có
+timeout 2 giây và tối đa 64 lượt tra đồng thời; vượt quá thì request được coi
+là chưa xác minh. `googleusercontent.com` không được chấp nhận vì mọi máy ảo
+trên Google Cloud đều có PTR dạng này.
 
 ### Auth challenge (`auth`)
 
@@ -176,6 +203,63 @@ Cách xử lý từng trường hợp:
 
 Mỗi sự kiện tấn công đều ghi kèm mã quốc gia.
 
+### Threat intelligence (danh sách IP đe dọa)
+
+Khai báo nguồn trong `waf.yaml` của node:
+
+```yaml
+threat_intel:
+  timeout: 60s          # thời gian tối đa của một lần tải
+  max_size_mb: 32       # danh sách lớn hơn bị từ chối
+  feeds:
+    - name: firehol_level1
+      url: https://iplists.firehol.org/files/firehol_level1.netset
+      refresh: 1h       # mặc định 1h, tối thiểu 1m
+    - name: spamhaus_drop
+      url: https://www.spamhaus.org/drop/drop.txt
+      refresh: 12h
+    - name: local
+      url: file:///etc/hcw-waf/blocklist.txt
+```
+
+Rồi bật cho từng site: `"threat_intel": "block"` (hoặc chọn trong form ứng
+dụng trên console).
+
+| Giá trị | Tác dụng với IP nằm trong danh sách |
+|---|---|
+| `off` | Không kiểm tra (mặc định) |
+| `block` | Trả trang chặn 403, ghi sự kiện `threat_intel` kèm tên nguồn |
+| `challenge` | Bắt giải anti-bot challenge (kể cả khi `bot_challenge` chưa bật; dùng `difficulty`, `ttl_sec`, `exclude_paths` của `bot_challenge`) |
+| `monitor` | Cho qua, chỉ ghi sự kiện |
+
+- **Định dạng:** văn bản thuần, mỗi dòng một IP, CIDR hoặc khoảng `a-b`, IPv4
+  và IPv6. Phần sau `#` hoặc `;` là chú thích, nên file `.netset`/`.ipset` của
+  FireHOL và Spamhaus DROP (`1.10.16.0/20 ; SBL256894`) dùng được ngay. Dòng
+  `0.0.0.0/0` bị bỏ qua.
+- **Tải nền:** mỗi nguồn tải theo chu kỳ `refresh` (cộng thêm tối đa 10% ngẫu
+  nhiên để các node không tải cùng lúc), dùng `If-None-Match`/`If-Modified-Since`
+  nên danh sách không đổi chỉ tốn một response 304.
+- **An toàn khi lỗi:** tải lỗi, timeout, quá cỡ hoặc nhận về trang HTML thì danh
+  sách cũ vẫn được dùng; lỗi được hiện trên trang **Hệ thống** và thử lại sau
+  tối đa 5 phút.
+- **Chạy offline:** mỗi lần tải thành công, bản sao được ghi vào
+  `<data_dir>/threatintel/`. Khi khởi động, node nạp bản này trước nên bảo vệ
+  được ngay cả khi chưa ra được Internet.
+- **Tra cứu nhanh:** các dải được sắp xếp, gộp lại và tìm nhị phân, độ phức tạp
+  O(log n), chịu được danh sách hàng trăm nghìn dòng.
+- **Không bao giờ chặn** IP loopback, private (10/8, 172.16/12, 192.168/16,
+  fc00::/7), link-local và CGNAT (100.64/10). FireHOL level1 có chứa các dải
+  bogon này; nếu không loại ra, khách nội bộ và load balancer sẽ bị chặn.
+- **Xử lý chặn nhầm:** rule đường dẫn `allow` (có thể kèm `ips`) bỏ qua kiểm
+  tra threat intelligence.
+- Engine dùng IP khách thật theo `trusted_proxies`: nếu WAF đứng sau load
+  balancer, phải khai báo dải IP của load balancer thì `X-Forwarded-For` mới
+  được tin.
+- Xem trạng thái (số mục, lần cập nhật, lỗi gần nhất) trên trang **Hệ thống**
+  của console hoặc `GET /api/open/threatintel`.
+- Sự kiện `threat_intel` (block, challenge) được tính vào
+  `hcw_acl_blocked_total`; sự kiện ở chế độ `monitor` vào `hcw_monitored_total`.
+
 ### Cảnh báo (Telegram, webhook)
 
 Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
@@ -184,7 +268,7 @@ Khai báo trong `waf.yaml` (xem `waf/examples/waf.yaml`). Cách hoạt động:
   khoảng 10 giây; sau đó mỗi `interval` (mặc định 5 phút) gửi tối đa một tin
   tổng hợp, gồm số sự kiện, top IP và một request mẫu.
 - `kinds` chọn loại cần báo: `waf`, `geo`, `ip_deny`, `ip_allow`,
-  `rate_limit`, `bot`, `auth`. Mặc định chỉ báo `waf`.
+  `rate_limit`, `bot`, `auth`, `threat_intel`. Mặc định chỉ báo `waf`.
 - **Telegram:** tạo bot qua @BotFather, thêm bot vào nhóm, điền `chat_id`.
 - **Webhook:** nhận JSON (`node`, `site`, `kind`, `count`, `top_ips`,
   `sample`). Header `X-HCW-Signature: sha256=<HMAC-SHA256(secret, body)>` dùng
@@ -276,6 +360,9 @@ Console có sẵn trong `hcw-waf`, chạy cùng địa chỉ với API
   trong file được kiểm tra hợp lệ trước; chỉ cần một mục lỗi là cả file bị từ
   chối và cấu hình đang chạy được giữ nguyên. API: `GET /api/open/backup`,
   `POST /api/open/restore`.
+- **Nguồn threat intelligence:** từng nguồn với số mục, bản đang dùng (tải về
+  hay bản lưu cục bộ), thời điểm cập nhật/kiểm tra và lỗi gần nhất. API
+  `GET /api/open/threatintel` (cả admin và viewer đều đọc được).
 - **Nhật ký thao tác (audit log):** mọi thay đổi qua API/console và mọi lần
   đăng nhập (thành công hay thất bại) đều được ghi lại: ai, IP nào, thao tác
   gì, kết quả ra sao, kèm nội dung request. Mật khẩu, khoá, token và mã 2FA
@@ -320,6 +407,7 @@ hoặc `Authorization: Bearer`. Mọi phản hồi có dạng
 | GET | `/api/open/stats` | – |
 | GET | `/api/open/timeseries` | – (60 phút gần nhất) |
 | GET | `/api/open/info` | – (version, số site) |
+| GET | `/api/open/threatintel` | – (trạng thái các nguồn threat intelligence) |
 | GET | `/api/open/brand` | – (không cần token) |
 | POST | `/api/auth/login` | `{"username","password","otp"}` → `token` (gửi qua header `X-HCW-Session`) |
 | POST | `/api/auth/logout` | – |
@@ -357,6 +445,11 @@ thật.
 - chế độ monitor;
 - rate limit, ACL, wildcard host;
 - `X-Forwarded-For` chỉ được tin khi đi qua proxy tin cậy;
+- threat intelligence: phân tích FireHOL/Spamhaus DROP, IPv4/IPv6, tải có
+  ETag/304, giữ danh sách cũ khi lỗi, giới hạn kích thước, timeout, nạp bản
+  cache khi khởi động offline; chế độ block/challenge/monitor/off;
+- xác minh Googlebot/Bingbot bằng reverse DNS + forward-confirm (resolver giả
+  lập), bot giả mạo vẫn bị challenge, bot thật vẫn bị WAF chặn nếu tấn công;
 - failover upstream;
 - TLS nhiều chứng chỉ theo SNI;
 - CRUD API và lưu trữ.

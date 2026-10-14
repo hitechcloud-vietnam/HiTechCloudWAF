@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/hitechcloud-vietnam/HiTechCloudWAF/waf/internal/model"
 )
 
 // Reserved path prefix for engine endpoints on every site.
@@ -145,7 +147,7 @@ func (e *Engine) handleEngineEndpoint(w http.ResponseWriter, r *http.Request, s 
 	}
 	switch r.URL.Path {
 	case hcwPrefix + "verify":
-		if r.Method != http.MethodPost || !s.site.Bot.Enabled {
+		if r.Method != http.MethodPost || !(s.site.Bot.Enabled || s.site.ThreatIntel == model.ThreatIntelChallenge) {
 			http.NotFound(w, r)
 			return true
 		}
@@ -189,17 +191,28 @@ func (e *Engine) handleEngineEndpoint(w http.ResponseWriter, r *http.Request, s 
 	return true
 }
 
-// challenges enforces auth then bot checks. It reports whether the request
-// may continue.
-func (e *Engine) challenges(w http.ResponseWriter, r *http.Request, s *siteRT, ip net.IP) bool {
+// challenges enforces auth then bot checks. tiFeed, when set, names the
+// threat-intelligence feed listing the client of a site in challenge mode:
+// the bot challenge then applies even if it is not enabled for everybody.
+// It reports whether the request may continue.
+func (e *Engine) challenges(w http.ResponseWriter, r *http.Request, s *siteRT, ip net.IP, tiFeed string) bool {
 	if a := s.site.Auth; a.Enabled && !excluded(r.URL.Path, a.ExcludePaths) {
 		if !e.validPass(r, cookieAuth, s, "auth", authVersion(a.PasswordHash), ip) {
 			e.writeAuthPage(w, r, s, r.URL.RequestURI(), false)
 			return false
 		}
 	}
-	if b := s.site.Bot; b.Enabled && !excluded(r.URL.Path, b.ExcludePaths) {
+	if b := s.site.Bot; (b.Enabled || tiFeed != "") && !excluded(r.URL.Path, b.ExcludePaths) {
 		if !e.validPass(r, cookieBot, s, "bot", strconv.Itoa(b.Difficulty), ip) {
+			// Verified crawlers cannot run the JavaScript; WAF rules still apply.
+			if e.verifiedBot(r, s, ip) {
+				return true
+			}
+			if tiFeed != "" {
+				ev := e.event(r, s, ip, "threat_intel", "challenge", http.StatusForbidden)
+				ev.Feed = tiFeed
+				e.opt.Events.Add(ev)
+			}
 			e.writeBotPage(w, r, s, ip)
 			return false
 		}
