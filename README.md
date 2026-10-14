@@ -77,6 +77,7 @@ OWASP Coraza + Core Rule Set v4, xem [docs/engine.vi.md](docs/engine.vi.md).
 | `branding/console/` | Overlay whitelabel cho image console |
 | `ctl/` | `hcwctl` – CLI quản trị, xem [ctl/README.md](ctl/README.md) |
 | `deploy/` | Helm chart và manifest Kubernetes, xem [docs/kubernetes.vi.md](docs/kubernetes.vi.md) |
+| `e2e/` | Kiểm thử đầu-cuối toàn nền tảng (2 engine, controller, agent, DNS, hcwctl), xem [e2e/README.md](e2e/README.md) |
 | `bench/` | Benchmark hiệu năng, xem [bench/RESULTS.md](bench/RESULTS.md) |
 | `mcp_server/` | HiTechCloud WAF MCP Server |
 | `management/` | Mã nguồn management/tcontrollerd (legacy) |
