@@ -3,8 +3,8 @@ module github.com/hitechcloud-vietnam/HiTechCloudWAF/mcp_server
 go 1.25.14
 
 require (
-	github.com/mark3labs/mcp-go v1.0.0-beta.1
-	go.uber.org/zap v1.27.0
+	github.com/mark3labs/mcp-go v1.2.1
+	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
