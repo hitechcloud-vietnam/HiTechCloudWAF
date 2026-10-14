@@ -17,8 +17,10 @@ Client ─► listener (HTTP / HTTPS theo SNI)
           ├─ Anti-bot challenge (JS proof-of-work) → trang kiểm tra trình duyệt
           ├─ OWASP Coraza + Core Rule Set v4 (SQLi, XSS, RCE, LFI/RFI,
           │   path traversal, scanner, protocol attack…) → 403
+          ├─ Cache response tĩnh trong RAM (tuỳ chọn) → trả ngay, không gọi upstream
           ├─ Reverse proxy → upstream (round-robin; upstream lỗi bị loại 10s)
-          └─ Bảo vệ động: mã hoá HTML/JS trong response (tuỳ chọn)
+          ├─ Bảo vệ động: mã hoá HTML/JS trong response (tuỳ chọn)
+          └─ Nén gzip response cho client (tuỳ chọn)
 ```
 
 Trang chặn mang thương hiệu HiTechCloud và hiển thị **Event ID** để tra cứu.
@@ -139,6 +141,48 @@ Nội dung gzip từ upstream được tự giải nén. Response đã mã hoá 
 - Đã kiểm thử trên Chromium thật: tiêu đề, CSS, script ngoài/inline và tiếng
   Việt đều đúng, không có lỗi console.
 
+### Cache response (`cache`)
+
+`{"enabled": true, "ttl_sec": 300, "max_object_kb": 1024, "paths": [], "extensions": [".css", ".js", ".png"]}`
+
+Engine giữ bản sao response tĩnh trong RAM để request lặp lại không phải đi
+tới upstream. Cache được kiểm tra **sau** ACL, rate limit, challenge và WAF,
+nên mọi request (kể cả request trúng cache) vẫn bị kiểm tra đầy đủ.
+
+- `paths` khác rỗng: cache mọi thứ dưới các tiền tố đường dẫn này (bỏ qua
+  `extensions`). Rỗng: cache theo phần mở rộng trong `extensions` (mặc định
+  `.css .js .png .jpg .jpeg .gif .svg .webp .ico .woff .woff2 .ttf .map`).
+- `ttl_sec` mặc định 300, tối đa 86400; nếu upstream gửi `Cache-Control:
+  s-maxage`/`max-age` ngắn hơn thì dùng giá trị đó.
+- Chỉ lưu response `200` cho `GET` (HEAD dùng chung bản của GET), không có
+  `Set-Cookie`, không có `Cache-Control: private/no-store/no-cache`, không
+  `Vary` (trừ `Accept-Encoding`), body ≤ `max_object_kb`, và không phải
+  response đã qua bảo vệ động (`X-HCW-Protected`). Request có
+  `Authorization` hoặc `Range` luôn đi thẳng tới upstream.
+- Response có header `X-HCW-Cache: MISS` (vừa được lưu) hoặc `HIT` (trả từ
+  cache, kèm `Age`). `If-None-Match` khớp ETag được trả `304`.
+- Toàn bộ site dùng chung một vùng nhớ LRU, kích thước đặt bằng `cache_mb`
+  trong `waf.yaml` (mặc định 256, `-1` để tắt). Khi đầy, object ít dùng nhất bị
+  loại trước.
+- Khi cấu hình một site thay đổi, cache của site đó bị xoá để không trả nội
+  dung sinh ra theo cấu hình cũ. Header `Cache-Control: no-cache` từ client
+  **không** bỏ qua cache.
+
+### Nén gzip (`compress`)
+
+`"compress": true` nén response gửi cho client khi client chấp nhận gzip,
+upstream chưa nén, kiểu nội dung là `text/*` (trừ `text/event-stream`),
+`application/javascript`, `application/json`, `application/xml` hoặc
+`image/svg+xml`, và body khai báo ≥ 1 KB (body không rõ độ dài vẫn được nén).
+Response gắn `Vary: Accept-Encoding`, ETag chuyển thành ETag yếu (`W/"…"`).
+
+Nén chạy song song với việc truyền dữ liệu nên không làm chậm streaming;
+SSE, WebSocket và request `HEAD` được giữ nguyên. Object trong cache được lưu
+dạng chưa nén, kèm một bản gzip tạo sẵn một lần khi lưu, nên request trúng
+cache không phải nén lại. Lưu ý: với đường dẫn được cache, engine tự giải nén
+response gzip của upstream trước khi lưu; nếu không bật `compress`, client sẽ
+nhận bản chưa nén, vì vậy nên bật `compress` cùng với `cache`.
+
 ### HTTPS tự động (Let's Encrypt)
 
 Bật `acme.enabled` trong `waf.yaml`, rồi bật `auto_tls` cho site có cổng
@@ -218,8 +262,8 @@ access_log:
 Mỗi request ghi một dòng JSON gồm các trường: `time`, `site_id`, `host`,
 `client_ip`, `country`, `method`, `uri`, `proto`, `tls`, `status`, `bytes`,
 `duration_ms`, `user_agent`, `referer`, `action` và `event_id` (khi bị chặn).
-`action` nhận một trong các giá trị: `proxied`, `blocked`, `challenged`,
-`redirected`, `error`, `acme`.
+`action` nhận một trong các giá trị: `proxied`, `cached` (trả từ cache),
+`blocked`, `challenged`, `redirected`, `error`, `acme`.
 
 Log được ghi bất đồng bộ nên không làm chậm traffic; nếu đĩa ghi không kịp, dòng
 log bị bỏ thay vì làm chậm request. Định dạng JSON đọc được ngay bằng

@@ -66,6 +66,59 @@ type DynamicProtection struct {
 	Paths []string `json:"paths"`
 }
 
+// CacheConfig keeps copies of static upstream responses in the node's
+// memory so repeated requests do not reach the origin. Security checks
+// (ACL, rate limits, challenges, WAF) still run on every request.
+type CacheConfig struct {
+	Enabled bool `json:"enabled"`
+	// TTLSec is how long an object is kept (default 300, at most 86400). A
+	// shorter upstream Cache-Control s-maxage/max-age wins.
+	TTLSec int `json:"ttl_sec"`
+	// MaxObjectKB is the largest response body stored (default 1024).
+	MaxObjectKB int `json:"max_object_kb"`
+	// Paths, when set, caches everything under these path prefixes and
+	// ignores Extensions. When empty, requests are cached by extension.
+	Paths []string `json:"paths"`
+	// Extensions of cacheable paths, e.g. ".css" (default: common static
+	// files, see DefaultCacheExtensions).
+	Extensions []string `json:"extensions"`
+}
+
+// DefaultCacheExtensions are cached when cache.extensions is empty.
+var DefaultCacheExtensions = []string{".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".map"}
+
+func (c *CacheConfig) normalize() error {
+	if c.TTLSec == 0 {
+		c.TTLSec = 300
+	}
+	if c.MaxObjectKB == 0 {
+		c.MaxObjectKB = 1024
+	}
+	if c.TTLSec < 1 || c.TTLSec > 86400 {
+		return errors.New("cache.ttl_sec must be 1..86400")
+	}
+	if c.MaxObjectKB < 1 || c.MaxObjectKB > 100*1024 {
+		return errors.New("cache.max_object_kb must be 1..102400")
+	}
+	if err := checkPaths(c.Paths); err != nil {
+		return err
+	}
+	if len(c.Extensions) == 0 {
+		c.Extensions = append([]string(nil), DefaultCacheExtensions...)
+	}
+	for i, x := range c.Extensions {
+		x = strings.ToLower(strings.TrimSpace(x))
+		if !strings.HasPrefix(x, ".") {
+			x = "." + x
+		}
+		if len(x) < 2 || len(x) > 16 || strings.ContainsAny(x[1:], "./?#* ") {
+			return fmt.Errorf("invalid cache extension %q (use e.g. .css)", c.Extensions[i])
+		}
+		c.Extensions[i] = x
+	}
+	return nil
+}
+
 // HealthCheck actively probes upstreams; unhealthy ones leave the rotation.
 type HealthCheck struct {
 	// Path to request, e.g. /healthz (empty = disabled).
@@ -186,6 +239,10 @@ type Site struct {
 	Rules     []PathRule        `json:"rules"`
 	Health    HealthCheck       `json:"health_check"`
 	Auth      AuthChallenge     `json:"auth"`
+	Cache     CacheConfig       `json:"cache"`
+	// Compress gzips compressible responses (text, JSON, JS, XML, SVG) for
+	// clients that accept it, when the upstream did not compress them.
+	Compress bool `json:"compress"`
 	// IPAllow, when non-empty, only admits these CIDRs. IPDeny always blocks.
 	IPAllow []string `json:"ip_allow"`
 	IPDeny  []string `json:"ip_deny"`
@@ -357,6 +414,9 @@ func (s *Site) Normalize() error {
 		return err
 	}
 	if err := s.Bot.normalize(); err != nil {
+		return err
+	}
+	if err := s.Cache.normalize(); err != nil {
 		return err
 	}
 	return s.Auth.normalize()

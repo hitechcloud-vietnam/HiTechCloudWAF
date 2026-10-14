@@ -41,9 +41,12 @@ type Options struct {
 	// Access receives one entry per request (optional).
 	Access interface{ Log(accesslog.Entry) }
 	// GeoIP resolves countries for country_allow/deny and events (optional).
-	GeoIP  interface{ Country(net.IP) string }
-	Log    *slog.Logger
-	Events *events.Log
+	GeoIP interface{ Country(net.IP) string }
+	// CacheMB is the memory budget of the response cache shared by all
+	// sites with cache enabled (0 = 256 MiB, negative = no cache).
+	CacheMB int
+	Log     *slog.Logger
+	Events  *events.Log
 }
 
 type upstream struct {
@@ -127,6 +130,7 @@ type Engine struct {
 	opt     Options
 	pool    *WAFPool
 	limiter *limiter
+	cache   *respCache // nil when disabled
 	rt      atomic.Pointer[runtime]
 
 	mu        sync.Mutex
@@ -175,7 +179,13 @@ func New(ctx context.Context, opt Options) *Engine {
 		opt.Secret = make([]byte, 32)
 		_, _ = crand.Read(opt.Secret)
 	}
+	if opt.CacheMB == 0 {
+		opt.CacheMB = defaultCacheMB
+	}
 	e := &Engine{opt: opt, pool: NewWAFPool(opt.ExtraRules), limiter: newLimiter(), listeners: map[int]*listener{}, ctx: ctx}
+	if opt.CacheMB > 0 {
+		e.cache = newRespCache(int64(opt.CacheMB) << 20)
+	}
 	e.rt.Store(&runtime{ports: map[int]*portRT{}})
 	go e.healthLoop(ctx)
 	go func() {
@@ -187,6 +197,9 @@ func New(ctx context.Context, opt Options) *Engine {
 				return
 			case now := <-t.C:
 				e.limiter.gc(now, 10*time.Minute)
+				if e.cache != nil {
+					e.cache.gc()
+				}
 			}
 		}
 	}()
@@ -283,8 +296,10 @@ func (e *Engine) Apply(sites []model.Site, certs []model.Cert) error {
 		sort.Slice(pr.wild, func(i, j int) bool { return len(pr.wild[i].suffix) > len(pr.wild[j].suffix) })
 	}
 	carryHealth(e.rt.Load(), rt)
+	prev := e.sites()
 	old := e.rt.Swap(rt)
 	e.pool.Retain(sites, e.opt.BodyLimit)
+	e.retainCache(prev, sites)
 	// Old transports are unreachable now; release their idle connections.
 	for _, pr := range old.ports {
 		for _, srt := range pr.allSites() {
@@ -706,12 +721,26 @@ rules:
 		}
 	}
 
+	e.deliver(w, r, s, ip, isTLS)
+}
+
+// deliver answers a request that passed every check: from the cache when
+// possible, otherwise from an upstream, gzipped when the site asks for it.
+func (e *Engine) deliver(w http.ResponseWriter, r *http.Request, s *siteRT, ip net.IP, isTLS bool) {
+	if compressRequest(s, r) {
+		gw := newGzipWriter(w, r)
+		defer gw.Close()
+		w = gw
+	}
+	if e.serveCached(w, r, s, isTLS) {
+		return
+	}
 	up := s.pick()
 	if up == nil {
 		http.Error(w, "no upstream available", http.StatusBadGateway)
 		return
 	}
-	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, ctxVal{ip: ip, tls: isTLS}))
+	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, ctxVal{ip: ip, tls: isTLS, fill: e.storeRequest(s, r)}))
 	up.proxy.ServeHTTP(w, r)
 }
 

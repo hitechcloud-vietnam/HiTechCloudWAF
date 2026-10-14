@@ -30,7 +30,7 @@ type Entry struct {
 	DurationMS float64   `json:"duration_ms"`
 	UserAgent  string    `json:"user_agent,omitempty"`
 	Referer    string    `json:"referer,omitempty"`
-	// Action: proxied, blocked, challenged, redirected, error.
+	// Action: proxied, cached, blocked, challenged, redirected, error.
 	Action  string `json:"action"`
 	EventID string `json:"event_id,omitempty"`
 }

@@ -36,6 +36,7 @@ type Config struct {
 	} `yaml:"api"`
 
 	BodyLimitKB    int      `yaml:"body_limit_kb"`
+	CacheMB        int      `yaml:"cache_mb"` // response cache of all sites (0 = 256 MiB, -1 = off)
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	EventsKept     int      `yaml:"events_kept"`
 	EventsFile     string   `yaml:"events_file"`
