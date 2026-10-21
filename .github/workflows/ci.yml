@@ -114,7 +114,7 @@ jobs:
       CHART: deploy/helm/hitechcloud-waf
       KUBECONFORM_VERSION: v0.6.7
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.4
