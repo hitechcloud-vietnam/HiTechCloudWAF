@@ -115,7 +115,7 @@ jobs:
       KUBECONFORM_VERSION: v0.6.7
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.4
       - name: helm lint
